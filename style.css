@@ -1,0 +1,47 @@
+body {
+    font-family: 'Inter', sans-serif;
+}
+
+/* スクロールバーのカスタマイズ */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* アクティブなナビゲーションのスタイル */
+.nav-btn.active {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-left: 4px solid #34d399; /* emerald-400 */
+}
+
+/* カードのホバーアニメーション */
+.card-hover {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card-hover:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+}
+
+/* モーダルのアニメーション用クラス */
+.modal-show {
+    display: flex !important;
+}
+.modal-fade-in {
+    opacity: 1 !important;
+}
+.modal-scale-in {
+    transform: scale(1) !important;
+}
