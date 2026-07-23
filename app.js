@@ -1,6 +1,7 @@
 const app = {
     currentTab: 'tours',
     data: [],
+    editIndex: null,
 
     init() {
         if (CONFIG.GAS_URL === "YOUR_GAS_URL_HERE") {
@@ -68,13 +69,13 @@ const app = {
             return;
         }
 
-        this.data.forEach(item => {
+        this.data.forEach((item, index) => {
             const card = document.createElement('div');
-            card.className = 'bg-white rounded-xl shadow-sm border border-gray-100 p-5 card-hover relative overflow-hidden';
+            card.className = 'bg-white rounded-xl shadow-sm border border-gray-100 p-5 card-hover relative overflow-hidden pb-14';
 
-            // タブごとに表示を変える
+            let inner = '';
             if (this.currentTab === 'tours') {
-                card.innerHTML = `
+                inner = `
                     ${item.photoUrl ? `<div class="h-32 -mx-5 -mt-5 mb-4 bg-cover bg-center" style="background-image: url('${item.photoUrl}')"></div>` : ''}
                     <div class="text-xs text-gray-400 mb-1">${item.date || '日付未定'}</div>
                     <h3 class="text-lg font-bold text-gray-800 mb-2">${item.destination || '目的地なし'}</h3>
@@ -85,7 +86,7 @@ const app = {
                     </div>
                 `;
             } else if (this.currentTab === 'spots') {
-                card.innerHTML = `
+                inner = `
                     <div class="flex justify-between items-start mb-2">
                         <h3 class="text-lg font-bold text-gray-800">${item.name}</h3>
                         <span class="text-xs px-2 py-1 rounded ${item.status === 'visited' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}">${item.status === 'visited' ? '訪問済' : '行きたい'}</span>
@@ -94,7 +95,7 @@ const app = {
                     ${item.mapUrl ? `<a href="${item.mapUrl}" target="_blank" class="block text-emerald-500 text-sm hover:underline mt-2">🗺️ マップで見る</a>` : ''}
                 `;
             } else if (this.currentTab === 'parts') {
-                card.innerHTML = `
+                inner = `
                     <div class="flex justify-between items-start mb-2">
                         <h3 class="text-lg font-bold text-gray-800">${item.name}</h3>
                         <span class="text-xs px-2 py-1 rounded ${item.status === 'installed' ? 'bg-blue-100 text-blue-700' : (item.status === 'purchased' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-700')}">${item.status}</span>
@@ -103,7 +104,7 @@ const app = {
                     <div class="font-semibold text-gray-700">¥${item.price || 0}</div>
                 `;
             } else if (this.currentTab === 'reminders') {
-                card.innerHTML = `
+                inner = `
                     <div class="flex items-center gap-3 mb-2">
                         <input type="checkbox" ${item.status === 'done' ? 'checked' : ''} disabled class="w-5 h-5 text-emerald-500 rounded border-gray-300">
                         <h3 class="text-lg font-bold ${item.status === 'done' ? 'text-gray-400 line-through' : 'text-gray-800'}">${item.task}</h3>
@@ -111,12 +112,31 @@ const app = {
                     <div class="text-sm text-red-500 font-medium ml-8">期限: ${item.dueDate || '未定'}</div>
                 `;
             }
+            
+            // 編集ボタンを追加
+            inner += `
+                <button onclick="app.editItem(${index})" class="absolute bottom-4 right-4 text-gray-400 hover:text-emerald-500 transition-colors flex items-center gap-1 text-sm bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                    編集
+                </button>
+            `;
+            
+            card.innerHTML = inner;
             contentArea.appendChild(card);
         });
     },
 
     // モーダル関連
-    showModal() {
+    showModal(isEdit = false) {
+        if (!isEdit) {
+            this.editIndex = null;
+            const titleEl = document.getElementById('modal-title');
+            if (titleEl) titleEl.textContent = '新規追加';
+        } else {
+            const titleEl = document.getElementById('modal-title');
+            if (titleEl) titleEl.textContent = '編集';
+        }
+
         const modal = document.getElementById('modal');
         const content = modal.querySelector('div');
         modal.classList.add('modal-show');
@@ -182,6 +202,23 @@ const app = {
         document.getElementById('form-fields').innerHTML = fieldsHTML;
     },
 
+    editItem(index) {
+        this.editIndex = index;
+        this.showModal(true);
+        
+        // フォームが生成されるのを待ってから値をセット
+        setTimeout(() => {
+            const item = this.data[index];
+            const form = document.getElementById('data-form');
+            Object.keys(item).forEach(key => {
+                const input = form.elements[key];
+                if (input) {
+                    input.value = item[key];
+                }
+            });
+        }, 20);
+    },
+
     closeModal() {
         const modal = document.getElementById('modal');
         const content = modal.querySelector('div');
@@ -209,6 +246,13 @@ const app = {
             data: data
         };
 
+        if (this.editIndex !== null) {
+            payload.action = 'edit';
+            payload.rowIndex = this.editIndex + 2; // ヘッダー行(1) + 0始まりを1始まりに補正(1) = 2
+        } else {
+            payload.action = 'add';
+        }
+
         try {
             submitBtn.textContent = '保存中...';
             submitBtn.disabled = true;
@@ -230,6 +274,7 @@ const app = {
             // 成功時
             this.closeModal();
             form.reset();
+            this.editIndex = null;
             await this.fetchData();
 
         } catch (error) {
