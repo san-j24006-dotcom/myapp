@@ -115,7 +115,7 @@ const app = {
         });
     },
 
-    // モーダル関連 (表示用のみ・送信処理はステップ3で実装)
+    // モーダル関連
     showModal() {
         const modal = document.getElementById('modal');
         const content = modal.querySelector('div');
@@ -125,8 +125,61 @@ const app = {
             content.classList.add('modal-scale-in');
         }, 10);
 
-        // 簡易的なフォーム生成 (ステップ3で本格実装)
-        document.getElementById('form-fields').innerHTML = `<p class="text-sm text-gray-500">※登録・編集機能は次のステップで実装します。</p>`;
+        let fieldsHTML = '';
+        if (this.currentTab === 'tours') {
+            fieldsHTML = `
+                <div><label class="block text-sm text-gray-600 mb-1">日付</label><input type="date" name="date" class="w-full border p-2 rounded" required></div>
+                <div><label class="block text-sm text-gray-600 mb-1">目的地</label><input type="text" name="destination" class="w-full border p-2 rounded" required></div>
+                <div><label class="block text-sm text-gray-600 mb-1">メモ</label><textarea name="memo" class="w-full border p-2 rounded"></textarea></div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div><label class="block text-sm text-gray-600 mb-1">走行距離(km)</label><input type="number" name="distance" class="w-full border p-2 rounded"></div>
+                    <div><label class="block text-sm text-gray-600 mb-1">燃費</label><input type="number" step="0.1" name="mileage" class="w-full border p-2 rounded"></div>
+                </div>
+                <div><label class="block text-sm text-gray-600 mb-1">写真URL</label><input type="url" name="photoUrl" class="w-full border p-2 rounded"></div>
+            `;
+        } else if (this.currentTab === 'spots') {
+            fieldsHTML = `
+                <div><label class="block text-sm text-gray-600 mb-1">スポット名</label><input type="text" name="name" class="w-full border p-2 rounded" required></div>
+                <div><label class="block text-sm text-gray-600 mb-1">ステータス</label>
+                    <select name="status" class="w-full border p-2 rounded">
+                        <option value="">行きたい</option>
+                        <option value="visited">訪問済</option>
+                    </select>
+                </div>
+                <div><label class="block text-sm text-gray-600 mb-1">種類</label>
+                    <select name="type" class="w-full border p-2 rounded">
+                        <option value="spot">スポット</option>
+                        <option value="parking">駐輪場</option>
+                    </select>
+                </div>
+                <div><label class="block text-sm text-gray-600 mb-1">マップURL</label><input type="url" name="mapUrl" class="w-full border p-2 rounded"></div>
+            `;
+        } else if (this.currentTab === 'parts') {
+            fieldsHTML = `
+                <div><label class="block text-sm text-gray-600 mb-1">パーツ名</label><input type="text" name="name" class="w-full border p-2 rounded" required></div>
+                <div><label class="block text-sm text-gray-600 mb-1">分類</label><input type="text" name="category" class="w-full border p-2 rounded" placeholder="例: 電装系"></div>
+                <div><label class="block text-sm text-gray-600 mb-1">価格</label><input type="number" name="price" class="w-full border p-2 rounded"></div>
+                <div><label class="block text-sm text-gray-600 mb-1">ステータス</label>
+                    <select name="status" class="w-full border p-2 rounded">
+                        <option value="検討中">検討中</option>
+                        <option value="purchased">購入済</option>
+                        <option value="installed">取付済</option>
+                    </select>
+                </div>
+            `;
+        } else if (this.currentTab === 'reminders') {
+            fieldsHTML = `
+                <div><label class="block text-sm text-gray-600 mb-1">タスク内容</label><input type="text" name="task" class="w-full border p-2 rounded" required></div>
+                <div><label class="block text-sm text-gray-600 mb-1">期限</label><input type="date" name="dueDate" class="w-full border p-2 rounded"></div>
+                <div><label class="block text-sm text-gray-600 mb-1">ステータス</label>
+                    <select name="status" class="w-full border p-2 rounded">
+                        <option value="">未完了</option>
+                        <option value="done">完了</option>
+                    </select>
+                </div>
+            `;
+        }
+        document.getElementById('form-fields').innerHTML = fieldsHTML;
     },
 
     closeModal() {
@@ -139,10 +192,53 @@ const app = {
         }, 300);
     },
 
-    submitForm(e) {
+    async submitForm(e) {
         e.preventDefault();
-        alert("保存機能は現在準備中です");
-        this.closeModal();
+        
+        const form = e.target;
+        const submitBtn = form.querySelector('button[type="submit"]');
+        const originalBtnText = submitBtn.textContent;
+        
+        // フォームデータをオブジェクトに変換
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData.entries());
+        
+        // 送信ペイロード
+        const payload = {
+            sheet: this.currentTab,
+            data: data
+        };
+
+        try {
+            submitBtn.textContent = '保存中...';
+            submitBtn.disabled = true;
+            submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+            const response = await fetch(CONFIG.GAS_URL, {
+                method: 'POST',
+                // プリフライト(OPTIONS)リクエストを避けるため、デフォルトのContent-Type等で送信する。
+                // GASは text/plain のBodyもパースして e.postData.contents で取得可能。
+                body: JSON.stringify(payload)
+            });
+
+            const result = await response.json();
+            
+            if (result.error) {
+                throw new Error(result.error);
+            }
+
+            // 成功時
+            this.closeModal();
+            form.reset();
+            await this.fetchData();
+
+        } catch (error) {
+            alert('保存に失敗しました: ' + error.message);
+        } finally {
+            submitBtn.textContent = originalBtnText;
+            submitBtn.disabled = false;
+            submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
     }
 };
 
