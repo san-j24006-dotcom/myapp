@@ -3,6 +3,51 @@ const app = {
     data: [],
     editIndex: null,
 
+    normalizeRecord(item) {
+        return Object.fromEntries(
+            Object.entries(item || {}).map(([key, value]) => [key.trim(), value])
+        );
+    },
+
+    escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, char => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        })[char]);
+    },
+
+    safeUrl(value) {
+        if (!value) return '';
+
+        try {
+            const url = new URL(value, window.location.href);
+            return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+        } catch {
+            return '';
+        }
+    },
+
+    formatDate(value) {
+        const inputValue = this.toDateInputValue(value);
+        return inputValue || this.escapeHtml(value || '日付未定');
+    },
+
+    toDateInputValue(value) {
+        if (!value) return '';
+        if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '';
+
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    },
+
     init() {
         if (CONFIG.GAS_URL === "YOUR_GAS_URL_HERE") {
             document.getElementById('content-area').innerHTML = `
@@ -43,16 +88,18 @@ const app = {
 
         try {
             const response = await fetch(`${CONFIG.GAS_URL}?sheet=${this.currentTab}`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
             const json = await response.json();
 
             if (json.error) throw new Error(json.error);
 
-            this.data = json.data || [];
+            this.data = (json.data || []).map(item => this.normalizeRecord(item));
             this.renderCards();
         } catch (error) {
             contentArea.innerHTML = `
                 <div class="col-span-full bg-red-50 text-red-600 p-4 rounded border-l-4 border-red-500">
-                    エラーが発生しました: ${error.message}
+                    エラーが発生しました: ${this.escapeHtml(error.message)}
                 </div>
             `;
         } finally {
@@ -73,43 +120,45 @@ const app = {
             const card = document.createElement('div');
             card.className = 'bg-white rounded-xl shadow-sm border border-gray-100 p-5 card-hover relative overflow-hidden pb-14';
 
+            const photoUrl = this.safeUrl(item.photoUrl);
+            const mapUrl = this.safeUrl(item.mapUrl);
             let inner = '';
             if (this.currentTab === 'tours') {
                 inner = `
-                    ${item.photoUrl ? `<div class="h-32 -mx-5 -mt-5 mb-4 bg-cover bg-center" style="background-image: url('${item.photoUrl}')"></div>` : ''}
-                    <div class="text-xs text-gray-400 mb-1">${item.date || '日付未定'}</div>
-                    <h3 class="text-lg font-bold text-gray-800 mb-2">${item.destination || '目的地なし'}</h3>
-                    <p class="text-gray-600 text-sm mb-3 line-clamp-2">${item.memo || ''}</p>
+                    ${photoUrl ? `<div class="h-32 -mx-5 -mt-5 mb-4 bg-cover bg-center" style="background-image: url('${this.escapeHtml(photoUrl)}')"></div>` : ''}
+                    <div class="text-xs text-gray-400 mb-1">${this.formatDate(item.date)}</div>
+                    <h3 class="text-lg font-bold text-gray-800 mb-2">${this.escapeHtml(item.destination || '目的地なし')}</h3>
+                    <p class="text-gray-600 text-sm mb-3 line-clamp-2">${this.escapeHtml(item.memo)}</p>
                     <div class="flex gap-2 text-xs">
-                        <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">走行: ${item.distance || 0}km</span>
-                        <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">燃費: ${item.mileage || '-'}</span>
+                        <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">走行: ${this.escapeHtml(item.distance || 0)}km</span>
+                        <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">燃費: ${this.escapeHtml(item.mileage || '-')}</span>
                     </div>
                 `;
             } else if (this.currentTab === 'spots') {
                 inner = `
                     <div class="flex justify-between items-start mb-2">
-                        <h3 class="text-lg font-bold text-gray-800">${item.name}</h3>
+                        <h3 class="text-lg font-bold text-gray-800">${this.escapeHtml(item.name)}</h3>
                         <span class="text-xs px-2 py-1 rounded ${item.status === 'visited' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}">${item.status === 'visited' ? '訪問済' : '行きたい'}</span>
                     </div>
                     <span class="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded mb-3 inline-block">${item.type === 'parking' ? '駐輪場' : 'スポット'}</span>
-                    ${item.mapUrl ? `<a href="${item.mapUrl}" target="_blank" class="block text-emerald-500 text-sm hover:underline mt-2">🗺️ マップで見る</a>` : ''}
+                    ${mapUrl ? `<a href="${this.escapeHtml(mapUrl)}" target="_blank" rel="noopener noreferrer" class="block text-emerald-500 text-sm hover:underline mt-2">🗺️ マップで見る</a>` : ''}
                 `;
             } else if (this.currentTab === 'parts') {
                 inner = `
                     <div class="flex justify-between items-start mb-2">
-                        <h3 class="text-lg font-bold text-gray-800">${item.name}</h3>
-                        <span class="text-xs px-2 py-1 rounded ${item.status === 'installed' ? 'bg-blue-100 text-blue-700' : (item.status === 'purchased' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-700')}">${item.status}</span>
+                        <h3 class="text-lg font-bold text-gray-800">${this.escapeHtml(item.name)}</h3>
+                        <span class="text-xs px-2 py-1 rounded ${item.status === 'installed' ? 'bg-blue-100 text-blue-700' : (item.status === 'purchased' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-700')}">${this.escapeHtml(item.status)}</span>
                     </div>
-                    <div class="text-sm text-gray-500 mb-1">分類: ${item.category}</div>
-                    <div class="font-semibold text-gray-700">¥${item.price || 0}</div>
+                    <div class="text-sm text-gray-500 mb-1">分類: ${this.escapeHtml(item.category)}</div>
+                    <div class="font-semibold text-gray-700">¥${this.escapeHtml(item.price || 0)}</div>
                 `;
             } else if (this.currentTab === 'reminders') {
                 inner = `
                     <div class="flex items-center gap-3 mb-2">
                         <input type="checkbox" ${item.status === 'done' ? 'checked' : ''} disabled class="w-5 h-5 text-emerald-500 rounded border-gray-300">
-                        <h3 class="text-lg font-bold ${item.status === 'done' ? 'text-gray-400 line-through' : 'text-gray-800'}">${item.task}</h3>
+                        <h3 class="text-lg font-bold ${item.status === 'done' ? 'text-gray-400 line-through' : 'text-gray-800'}">${this.escapeHtml(item.task)}</h3>
                     </div>
-                    <div class="text-sm text-red-500 font-medium ml-8">期限: ${item.dueDate || '未定'}</div>
+                    <div class="text-sm text-red-500 font-medium ml-8">期限: ${this.formatDate(item.dueDate) || '未定'}</div>
                 `;
             }
             
@@ -213,7 +262,7 @@ const app = {
             Object.keys(item).forEach(key => {
                 const input = form.elements[key];
                 if (input) {
-                    input.value = item[key];
+                    input.value = input.type === 'date' ? this.toDateInputValue(item[key]) : item[key];
                 }
             });
         }, 20);

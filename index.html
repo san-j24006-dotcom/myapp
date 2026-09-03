@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,6 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body class="bg-gray-50 text-gray-800 font-sans h-screen flex overflow-hidden">
     <!-- サイドバー -->
     <aside class="w-64 bg-slate-900 text-white flex flex-col hidden md:flex">
@@ -16,10 +18,18 @@
             <h1 class="text-2xl font-bold text-emerald-400">MotoLog</h1>
         </div>
         <nav class="flex-1 px-4 space-y-2">
-            <button onclick="app.switchTab('tours')" class="w-full text-left px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors nav-btn" data-tab="tours">🛣️ ツーリング記録</button>
-            <button onclick="app.switchTab('spots')" class="w-full text-left px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors nav-btn" data-tab="spots">📍 スポット・駐輪場</button>
-            <button onclick="app.switchTab('parts')" class="w-full text-left px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors nav-btn" data-tab="parts">⚙️ パーツ管理</button>
-            <button onclick="app.switchTab('reminders')" class="w-full text-left px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors nav-btn" data-tab="reminders">📅 リマインダー</button>
+            <button onclick="app.switchTab('tours')"
+                class="w-full text-left px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors nav-btn"
+                data-tab="tours">🛣️ ツーリング記録</button>
+            <button onclick="app.switchTab('spots')"
+                class="w-full text-left px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors nav-btn"
+                data-tab="spots">📍 スポット・駐輪場</button>
+            <button onclick="app.switchTab('parts')"
+                class="w-full text-left px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors nav-btn"
+                data-tab="parts">⚙️ パーツ管理</button>
+            <button onclick="app.switchTab('reminders')"
+                class="w-full text-left px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors nav-btn"
+                data-tab="reminders">📅 リマインダー</button>
         </nav>
     </aside>
 
@@ -35,7 +45,8 @@
     <main class="flex-1 flex flex-col h-full relative overflow-y-auto pb-16 md:pb-0">
         <header class="bg-white shadow-sm p-4 flex justify-between items-center sticky top-0 z-10">
             <h2 id="page-title" class="text-xl font-semibold">ツーリング記録</h2>
-            <button onclick="app.showModal()" class="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg shadow transition-colors font-medium">
+            <button onclick="app.showModal()"
+                class="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg shadow transition-colors font-medium">
                 + 新規追加
             </button>
         </header>
@@ -46,7 +57,7 @@
                 <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-emerald-500 mx-auto"></div>
                 <p class="text-gray-500 mt-3">読み込み中...</p>
             </div>
-            
+
             <!-- データ表示エリア -->
             <div id="content-area" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 <!-- JSでコンテンツを生成 -->
@@ -55,8 +66,10 @@
     </main>
 
     <!-- モーダル (入力フォーム) -->
-    <div id="modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50 p-4 opacity-0 transition-opacity">
-        <div class="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden transform scale-95 transition-transform">
+    <div id="modal"
+        class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50 p-4 opacity-0 transition-opacity">
+        <div
+            class="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden transform scale-95 transition-transform">
             <div class="p-6 border-b border-gray-100 flex justify-between items-center">
                 <h3 id="modal-title" class="text-lg font-bold">新規追加</h3>
                 <button onclick="app.closeModal()" class="text-gray-400 hover:text-gray-700">✖</button>
@@ -67,8 +80,10 @@
                         <!-- JSで入力フィールドを生成 -->
                     </div>
                     <div class="mt-6 flex justify-end space-x-3">
-                        <button type="button" onclick="app.closeModal()" class="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">キャンセル</button>
-                        <button type="submit" class="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 shadow">保存する</button>
+                        <button type="button" onclick="app.closeModal()"
+                            class="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">キャンセル</button>
+                        <button type="submit"
+                            class="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 shadow">保存する</button>
                     </div>
                 </form>
             </div>
@@ -79,4 +94,5 @@
     <script src="config.js"></script>
     <script src="app.js"></script>
 </body>
+
 </html>
