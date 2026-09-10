@@ -1,4 +1,11 @@
 var PHOTO_FOLDER_ID = '19pnCmseZGW9Oo5QaiFtsNjliOWdzGFp0';
+var DEFAULT_HEADERS = {
+  tours: ['id', 'date', 'endDate', 'destination', 'memo', 'distance', 'dailyDistances', 'fuelEntries', 'fuelTotal', 'photoUrl', 'photoUrls'],
+  spots: ['id', 'name', 'status', 'type', 'mapUrl'],
+  parts: ['id', 'name', 'category', 'price', 'status'],
+  reminders: ['id', 'task', 'dueDate', 'status'],
+  deleted: ['sheet', 'rowIndex', 'deletedAt', 'id', 'legacyKey']
+};
 
 function authorize() {
   SpreadsheetApp.getActiveSpreadsheet().getName();
@@ -124,7 +131,7 @@ function addRow(postData) {
     return createJsonResponse({ error: 'Sheet not found: ' + sheetName });
   }
 
-  var headers = ensureHeaders(sheet, rowData);
+  var headers = ensureHeaders(sheet, rowData, sheetName);
   var newRow = headers.map(function (header) {
     return rowData[header] !== undefined ? rowData[header] : '';
   });
@@ -150,7 +157,7 @@ function markDeleted(postData) {
     id: data.id || '',
     legacyKey: data.legacyKey || ''
   };
-  var headers = ensureHeaders(sheet, deletedData);
+  var headers = ensureHeaders(sheet, deletedData, 'deleted');
   var row = headers.map(function (header) {
     return deletedData[header] !== undefined ? deletedData[header] : '';
   });
@@ -164,14 +171,21 @@ function markDeleted(postData) {
   return createJsonResponse({ success: true, message: 'Deleted marker added' });
 }
 
-function ensureHeaders(sheet, rowData) {
+function ensureHeaders(sheet, rowData, sheetName) {
   var lastColumn = Math.max(sheet.getLastColumn(), 1);
   var headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(function (header) {
     return String(header || '').trim();
   });
   var changed = false;
+  var requiredHeaders = (DEFAULT_HEADERS[sheetName] || []).slice();
 
   Object.keys(rowData || {}).forEach(function (key) {
+    if (requiredHeaders.indexOf(key) === -1) {
+      requiredHeaders.push(key);
+    }
+  });
+
+  requiredHeaders.forEach(function (key) {
     if (headers.indexOf(key) === -1) {
       headers.push(key);
       changed = true;

@@ -226,12 +226,19 @@ const app = {
     formatDateRange(item) {
         const startDate = this.toDateInputValue(item.date);
         const endDate = this.toDateInputValue(item.endDate);
+        const dailyDates = this.parseDailyDistances(item.dailyDistances)
+            .map(entry => this.toDateInputValue(entry.date))
+            .filter(Boolean);
+        const firstDailyDate = dailyDates[0] || '';
+        const lastDailyDate = dailyDates[dailyDates.length - 1] || '';
+        const displayStart = startDate || firstDailyDate;
+        const displayEnd = endDate || lastDailyDate || displayStart;
 
-        if (startDate && endDate && startDate !== endDate) {
-            return `${startDate} ～ ${endDate}`;
+        if (displayStart && displayEnd && displayStart !== displayEnd) {
+            return `${displayStart} ～ ${displayEnd}`;
         }
 
-        return startDate || endDate || '日付未定';
+        return displayStart || displayEnd || '日付未定';
     },
 
     dateRange(startValue, endValue) {
@@ -472,8 +479,8 @@ const app = {
                 const totalDistance = this.hasValue(item.distance) ? item.distance : this.dailyDistanceTotal(item.dailyDistances);
                 const totalFuel = this.hasValue(item.fuelTotal) ? Number(item.fuelTotal) : this.fuelTotal(item.fuelEntries);
                 const chips = [
-                    totalDistance ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">走行: ${this.escapeHtml(totalDistance)}km</span>` : '',
-                    totalFuel ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">給油: ${this.escapeHtml(this.formatCurrency(totalFuel))}</span>` : ''
+                    totalDistance ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">走行合計: ${this.escapeHtml(totalDistance)}km</span>` : '',
+                    totalFuel ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">給油合計: ${this.escapeHtml(this.formatCurrency(totalFuel))}</span>` : ''
                 ].filter(Boolean).join('');
 
                 inner = `
@@ -542,14 +549,30 @@ const app = {
         const dailyDistanceHtml = dailyDistances.map(entry => (
             `<div class="flex justify-between border-b border-gray-100 py-1"><span>${this.escapeHtml(this.formatShortDate(entry.date) || entry.date || '-')}</span><span>${this.escapeHtml(entry.distance || 0)}km</span></div>`
         )).join('');
+        const dailyDistanceSection = dailyDistances.length || totalDistance ? `
+            <div>
+                <div class="text-sm text-gray-400 mb-1">日別走行距離</div>
+                <div class="text-sm text-gray-700">
+                    ${dailyDistanceHtml}
+                    <div class="flex justify-between pt-2 font-semibold text-gray-800"><span>合計</span><span>${this.escapeHtml(totalDistance)}km</span></div>
+                </div>
+            </div>
+        ` : '';
         const fuelEntriesHtml = fuelEntries.map((entry, index) => (
             `<div class="grid grid-cols-4 gap-2 border-b border-gray-100 py-1"><span>${index + 1}回目</span><span>${this.escapeHtml(entry.unitPrice || 0)}円/L</span><span>${this.escapeHtml(entry.liters || 0)}L</span><span class="text-right">${this.escapeHtml(this.formatCurrency(this.fuelEntryTotal(entry)))}</span></div>`
         )).join('');
+        const fuelEntriesSection = fuelEntries.length || totalFuel ? `
+            <div>
+                <div class="text-sm text-gray-400 mb-1">給油</div>
+                <div class="text-sm text-gray-700">
+                    ${fuelEntriesHtml}
+                    <div class="flex justify-between pt-2 font-semibold text-gray-800"><span>合計</span><span>${this.escapeHtml(this.formatCurrency(totalFuel))}</span></div>
+                </div>
+            </div>
+        ` : '';
         const details = [
             `<div><span class="text-gray-400">日付</span><div class="font-medium">${this.escapeHtml(this.formatDateRange(item))}</div></div>`,
-            `<div><span class="text-gray-400">目的地</span><div class="font-medium">${this.escapeHtml(item.destination || '-')}</div></div>`,
-            totalDistance ? `<div><span class="text-gray-400">走行距離</span><div class="font-medium">${this.escapeHtml(totalDistance)}km</div></div>` : '',
-            totalFuel ? `<div><span class="text-gray-400">給油合計</span><div class="font-medium">${this.escapeHtml(this.formatCurrency(totalFuel))}</div></div>` : ''
+            `<div><span class="text-gray-400">目的地</span><div class="font-medium">${this.escapeHtml(item.destination || '-')}</div></div>`
         ].filter(Boolean).join('');
         let modal = document.getElementById('record-modal');
 
@@ -571,8 +594,8 @@ const app = {
                     <div class="grid grid-cols-2 gap-3 text-sm">
                         ${details}
                     </div>
-                    ${dailyDistanceHtml ? `<div><div class="text-sm text-gray-400 mb-1">日別走行距離</div><div class="text-sm text-gray-700">${dailyDistanceHtml}</div></div>` : ''}
-                    ${fuelEntriesHtml ? `<div><div class="text-sm text-gray-400 mb-1">給油</div><div class="text-sm text-gray-700">${fuelEntriesHtml}</div></div>` : ''}
+                    ${dailyDistanceSection}
+                    ${fuelEntriesSection}
                     ${item.memo ? `<div><div class="text-sm text-gray-400 mb-1">メモ</div><p class="text-sm text-gray-700 whitespace-pre-wrap">${this.escapeHtml(item.memo)}</p></div>` : ''}
                     ${photoUrls.length ? `<div><div class="text-sm text-gray-400 mb-2">追加写真</div><div class="grid grid-cols-2 gap-3">${photoUrls.map(url => `<a href="${this.escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="block h-32 rounded bg-cover bg-center border border-gray-200" style="background-image: url('${this.escapeHtml(url)}')"></a>`).join('')}</div></div>` : ''}
                 </div>
@@ -637,16 +660,20 @@ const app = {
                 <input type="hidden" name="dailyDistances">
                 <input type="hidden" name="fuelEntries">
                 <input type="hidden" name="fuelTotal">
-                <div>
-                    <label class="block text-sm text-gray-600 mb-1">日別走行距離</label>
+                <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                    <div class="mb-2 flex items-center justify-between gap-2">
+                        <label class="block text-sm font-medium text-gray-700">日別走行距離</label>
+                        <div id="daily-distance-total" class="text-sm font-medium text-emerald-700"></div>
+                    </div>
                     <div id="daily-distance-fields" class="space-y-2"></div>
-                    <div id="daily-distance-total" class="text-sm text-gray-500 mt-2"></div>
                 </div>
-                <div>
-                    <label class="block text-sm text-gray-600 mb-1">給油</label>
+                <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                    <div class="mb-2 flex items-center justify-between gap-2">
+                        <label class="block text-sm font-medium text-gray-700">給油</label>
+                        <div id="fuel-entry-total" class="text-sm font-medium text-emerald-700"></div>
+                    </div>
                     <div id="fuel-entry-fields" class="space-y-2"></div>
-                    <button type="button" onclick="app.addFuelEntry()" class="mt-2 text-sm text-emerald-600 hover:underline">給油を追加</button>
-                    <div id="fuel-entry-total" class="text-sm text-gray-500 mt-2"></div>
+                    <button type="button" onclick="app.addFuelEntry()" class="mt-3 w-full rounded border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-700">給油を追加</button>
                 </div>
                 <div>
                     <label class="block text-sm text-gray-600 mb-1">写真</label>
@@ -735,7 +762,7 @@ const app = {
         }
 
         container.innerHTML = dates.map(date => `
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 rounded border border-white bg-white p-2">
                 <span class="w-16 shrink-0 text-sm text-gray-600">${this.escapeHtml(this.formatShortDate(date) || date)}</span>
                 <input type="number" min="0" step="0.1" inputmode="decimal" data-daily-distance-date="${this.escapeHtml(date)}" value="${this.escapeHtml(storedByDate.get(date) || '')}" oninput="app.syncDailyDistances()" class="min-w-0 flex-1 border p-2 rounded" placeholder="走行距離">
                 <span class="shrink-0 text-sm text-gray-400">km</span>
@@ -786,7 +813,7 @@ const app = {
         const rows = entries.length ? entries : [{ unitPrice: '', liters: '' }];
 
         container.innerHTML = rows.map((entry, index) => `
-            <div data-fuel-row class="rounded border border-gray-100 p-3">
+            <div data-fuel-row class="rounded border border-white bg-white p-3">
                 <div class="grid grid-cols-2 gap-2">
                     <div>
                         <label class="block text-xs text-gray-500 mb-1">${index + 1}回目 単価</label>
@@ -1081,6 +1108,10 @@ const app = {
             delete data.photoFile;
             delete data.extraPhotoFiles;
             delete data.mileage;
+            if (this.currentTab === 'tours') {
+                if (!data.date && data.endDate) data.date = data.endDate;
+                if (!data.endDate && data.date) data.endDate = data.date;
+            }
             const oldItem = this.editIndex !== null ? this.data[this.editIndex] : null;
             data.id = oldItem?.id || data.id || this.createRecordId();
             const context = this.uploadContext(data);
