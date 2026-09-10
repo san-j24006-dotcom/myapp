@@ -124,9 +124,7 @@ function addRow(postData) {
     return createJsonResponse({ error: 'Sheet not found: ' + sheetName });
   }
 
-  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(function (header) {
-    return String(header || '').trim();
-  });
+  var headers = ensureHeaders(sheet, rowData);
   var newRow = headers.map(function (header) {
     return rowData[header] !== undefined ? rowData[header] : '';
   });
@@ -141,17 +139,49 @@ function markDeleted(postData) {
 
   if (!sheet) {
     sheet = spreadsheet.insertSheet('deleted');
-    sheet.appendRow(['sheet', 'rowIndex', 'deletedAt']);
+    sheet.appendRow(['sheet', 'rowIndex', 'deletedAt', 'id']);
   }
 
   var data = postData.data || {};
-  sheet.appendRow([data.sheet || postData.sheet || '', data.rowIndex || '', new Date().toISOString()]);
+  var deletedData = {
+    sheet: data.sheet || postData.sheet || '',
+    rowIndex: data.rowIndex || '',
+    deletedAt: new Date().toISOString(),
+    id: data.id || ''
+  };
+  var headers = ensureHeaders(sheet, deletedData);
+  var row = headers.map(function (header) {
+    return deletedData[header] !== undefined ? deletedData[header] : '';
+  });
+
+  sheet.appendRow(row);
 
   if (data.deletePhotos !== false && data.photoUrls) {
     deletePhotos(data.photoUrls);
   }
 
   return createJsonResponse({ success: true, message: 'Deleted marker added' });
+}
+
+function ensureHeaders(sheet, rowData) {
+  var lastColumn = Math.max(sheet.getLastColumn(), 1);
+  var headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(function (header) {
+    return String(header || '').trim();
+  });
+  var changed = false;
+
+  Object.keys(rowData || {}).forEach(function (key) {
+    if (headers.indexOf(key) === -1) {
+      headers.push(key);
+      changed = true;
+    }
+  });
+
+  if (changed) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
+
+  return headers;
 }
 
 function deletePhotos(photoUrls) {

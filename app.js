@@ -3,6 +3,7 @@ const app = {
     data: [],
     editIndex: null,
     deletedRows: new Set(),
+    deletedIds: new Set(),
     removedPhotoUrls: new Set(),
     pendingCoverPhotoFile: null,
     pendingExtraPhotoFiles: [],
@@ -22,16 +23,16 @@ const app = {
 
     isEmptyRecord(item) {
         return Object.entries(item || {})
-            .filter(([key]) => key !== '__rowIndex')
+            .filter(([key]) => key !== '__rowIndex' && key !== 'id')
             .every(([, value]) => String(value ?? '').trim() === '');
     },
 
     emptyRecordForCurrentTab() {
         const fields = {
-            tours: ['date', 'destination', 'memo', 'distance', 'mileage', 'photoUrl', 'photoUrls'],
-            spots: ['name', 'status', 'type', 'mapUrl'],
-            parts: ['name', 'category', 'price', 'status'],
-            reminders: ['task', 'dueDate', 'status']
+            tours: ['id', 'date', 'destination', 'memo', 'distance', 'mileage', 'photoUrl', 'photoUrls'],
+            spots: ['id', 'name', 'status', 'type', 'mapUrl'],
+            parts: ['id', 'name', 'category', 'price', 'status'],
+            reminders: ['id', 'task', 'dueDate', 'status']
         };
 
         return Object.fromEntries(fields[this.currentTab].map(field => [field, '']));
@@ -89,6 +90,14 @@ const app = {
 
     isDrivePhotoUrl(url) {
         return /drive\.google\.com\/(?:thumbnail|uc|file\/d\/|open)/i.test(url);
+    },
+
+    createRecordId() {
+        if (window.crypto?.randomUUID) {
+            return window.crypto.randomUUID();
+        }
+
+        return `motolog-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     },
 
     categoryLabel(tab = this.currentTab) {
@@ -245,13 +254,15 @@ const app = {
             const json = await response.json();
             if (json.error) throw new Error(json.error);
 
-            this.data = (json.data || [])
+            const records = (json.data || [])
                 .map((item, index) => ({
                     ...this.normalizeRecord(item),
                     __rowIndex: index + 2
                 }))
-                .filter(item => !this.isEmptyRecord(item))
-                .filter(item => !this.deletedRows.has(item.__rowIndex));
+                .filter(item => !this.isEmptyRecord(item));
+            const visibleRecords = records.filter(item => !this.isDeletedRecord(item));
+
+            this.data = visibleRecords.length || records.length === 0 ? visibleRecords : records;
             this.renderCards();
         } catch (error) {
             contentArea.innerHTML = `
@@ -266,22 +277,37 @@ const app = {
 
     async fetchDeletedRows() {
         this.deletedRows = new Set();
+        this.deletedIds = new Set();
 
         try {
             const response = await fetch(`${CONFIG.GAS_URL}?sheet=deleted`);
             if (!response.ok) return;
 
             const json = await response.json();
-            const deletedRows = (json.data || [])
+            const deletedItems = (json.data || [])
                 .map(item => this.normalizeRecord(item))
-                .filter(item => item.sheet === this.currentTab)
+                .filter(item => item.sheet === this.currentTab);
+            const deletedRows = deletedItems
                 .map(item => Number(item.rowIndex))
                 .filter(Number.isInteger);
+            const deletedIds = deletedItems
+                .map(item => String(item.id || '').trim())
+                .filter(Boolean);
 
             this.deletedRows = new Set(deletedRows);
+            this.deletedIds = new Set(deletedIds);
         } catch {
             this.deletedRows = new Set();
+            this.deletedIds = new Set();
         }
+    },
+
+    isDeletedRecord(item) {
+        if (item.id) {
+            return this.deletedIds.has(String(item.id));
+        }
+
+        return this.deletedRows.has(item.__rowIndex);
     },
 
     renderCards() {
@@ -701,6 +727,7 @@ const app = {
                 data: {
                     sheet: this.currentTab,
                     rowIndex,
+                    id: item.id || '',
                     deletedAt: new Date().toISOString(),
                     deletePhotos: true,
                     photoUrls: this.allPhotoUrls(item)
@@ -728,6 +755,8 @@ const app = {
             const data = Object.fromEntries(formData.entries());
             delete data.photoFile;
             delete data.extraPhotoFiles;
+            const oldItem = this.editIndex !== null ? this.data[this.editIndex] : null;
+            data.id = oldItem?.id || data.id || this.createRecordId();
             const context = this.uploadContext(data);
 
             if (this.pendingCoverPhotoFile) {
@@ -756,8 +785,6 @@ const app = {
                 sheet: this.currentTab,
                 data
             };
-            const oldItem = this.editIndex !== null ? this.data[this.editIndex] : null;
-
             if (this.editIndex !== null) {
                 const rowIndex = this.data[this.editIndex]?.__rowIndex || this.editIndex + 2;
 
