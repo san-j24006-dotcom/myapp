@@ -4,6 +4,7 @@ const app = {
     editIndex: null,
     deletedRows: new Set(),
     deletedIds: new Set(),
+    deletedRecordKeys: new Set(),
     removedPhotoUrls: new Set(),
     pendingCoverPhotoFile: null,
     pendingExtraPhotoFiles: [],
@@ -29,7 +30,7 @@ const app = {
 
     emptyRecordForCurrentTab() {
         const fields = {
-            tours: ['id', 'date', 'destination', 'memo', 'distance', 'mileage', 'photoUrl', 'photoUrls'],
+            tours: ['id', 'date', 'endDate', 'destination', 'memo', 'distance', 'dailyDistances', 'mileage', 'photoUrl', 'photoUrls'],
             spots: ['id', 'name', 'status', 'type', 'mapUrl'],
             parts: ['id', 'name', 'category', 'price', 'status'],
             reminders: ['id', 'task', 'dueDate', 'status']
@@ -100,6 +101,20 @@ const app = {
         return `motolog-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     },
 
+    recordKey(item = {}) {
+        return [
+            this.toDateInputValue(item.date),
+            this.toDateInputValue(item.endDate),
+            item.destination,
+            item.memo,
+            item.distance,
+            item.dailyDistances,
+            item.mileage,
+            item.photoUrl,
+            item.photoUrls
+        ].map(value => String(value ?? '').trim()).join('|');
+    },
+
     categoryLabel(tab = this.currentTab) {
         return {
             tours: 'ツーリング記録',
@@ -111,7 +126,7 @@ const app = {
 
     uploadContext(data = {}) {
         const name = data.destination || data.name || data.task || data.memo || '未分類';
-        const date = data.date || data.dueDate || new Date().toISOString().slice(0, 10);
+        const date = this.formatDateRange(data) || data.dueDate || new Date().toISOString().slice(0, 10);
 
         return {
             sheet: this.currentTab,
@@ -201,6 +216,21 @@ const app = {
         return inputValue || this.escapeHtml(value || '日付未定');
     },
 
+    hasValue(value) {
+        return String(value ?? '').trim() !== '';
+    },
+
+    formatDateRange(item) {
+        const startDate = this.toDateInputValue(item.date);
+        const endDate = this.toDateInputValue(item.endDate);
+
+        if (startDate && endDate && startDate !== endDate) {
+            return `${startDate} ～ ${endDate}`;
+        }
+
+        return startDate || endDate || '日付未定';
+    },
+
     toDateInputValue(value) {
         if (!value) return '';
         if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
@@ -260,9 +290,7 @@ const app = {
                     __rowIndex: index + 2
                 }))
                 .filter(item => !this.isEmptyRecord(item));
-            const visibleRecords = records.filter(item => !this.isDeletedRecord(item));
-
-            this.data = visibleRecords.length || records.length === 0 ? visibleRecords : records;
+            this.data = records.filter(item => !this.isDeletedRecord(item));
             this.renderCards();
         } catch (error) {
             contentArea.innerHTML = `
@@ -278,6 +306,7 @@ const app = {
     async fetchDeletedRows() {
         this.deletedRows = new Set();
         this.deletedIds = new Set();
+        this.deletedRecordKeys = new Set();
 
         try {
             const response = await fetch(`${CONFIG.GAS_URL}?sheet=deleted`);
@@ -293,12 +322,17 @@ const app = {
             const deletedIds = deletedItems
                 .map(item => String(item.id || '').trim())
                 .filter(Boolean);
+            const deletedRecordKeys = deletedItems
+                .map(item => String(item.legacyKey || '').trim())
+                .filter(Boolean);
 
             this.deletedRows = new Set(deletedRows);
             this.deletedIds = new Set(deletedIds);
+            this.deletedRecordKeys = new Set(deletedRecordKeys);
         } catch {
             this.deletedRows = new Set();
             this.deletedIds = new Set();
+            this.deletedRecordKeys = new Set();
         }
     },
 
@@ -307,7 +341,12 @@ const app = {
             return this.deletedIds.has(String(item.id));
         }
 
-        return this.deletedRows.has(item.__rowIndex);
+        const legacyKey = this.recordKey(item);
+        if (legacyKey && this.deletedRecordKeys.has(legacyKey)) {
+            return true;
+        }
+
+        return false;
     },
 
     renderCards() {
@@ -322,21 +361,27 @@ const app = {
         this.data.forEach((item, index) => {
             const card = document.createElement('div');
             card.className = 'bg-white rounded-xl shadow-sm border border-gray-100 p-5 card-hover relative overflow-hidden pb-20';
+            if (this.currentTab === 'tours') {
+                card.classList.add('cursor-pointer');
+                card.onclick = () => this.showRecord(index);
+            }
 
             const photoUrl = this.safeUrl(item.photoUrl);
             const mapUrl = this.safeUrl(item.mapUrl);
             let inner = '';
 
             if (this.currentTab === 'tours') {
+                const chips = [
+                    this.hasValue(item.distance) ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">走行: ${this.escapeHtml(item.distance)}km</span>` : '',
+                    this.hasValue(item.mileage) ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">燃費: ${this.escapeHtml(item.mileage)}</span>` : ''
+                ].filter(Boolean).join('');
+
                 inner = `
                     ${photoUrl ? `<div class="h-32 -mx-5 -mt-5 mb-4 bg-cover bg-center" style="background-image: url('${this.escapeHtml(photoUrl)}')"></div>` : ''}
-                    <div class="text-xs text-gray-400 mb-1">${this.formatDate(item.date)}</div>
+                    <div class="text-xs text-gray-400 mb-1">${this.escapeHtml(this.formatDateRange(item))}</div>
                     <h3 class="text-lg font-bold text-gray-800 mb-2">${this.escapeHtml(item.destination || '目的地なし')}</h3>
                     <p class="text-gray-600 text-sm mb-3 line-clamp-2">${this.escapeHtml(item.memo)}</p>
-                    <div class="flex gap-2 text-xs">
-                        <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">走行: ${this.escapeHtml(item.distance || 0)}km</span>
-                        <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">燃費: ${this.escapeHtml(item.mileage || '-')}</span>
-                    </div>
+                    ${chips ? `<div class="flex gap-2 text-xs">${chips}</div>` : ''}
                 `;
             } else if (this.currentTab === 'spots') {
                 inner = `
@@ -368,12 +413,11 @@ const app = {
 
             inner += `
                 <div class="absolute bottom-4 right-4 left-4 flex flex-wrap justify-end gap-2">
-                    ${this.currentTab === 'tours' ? `<button onclick="app.showRecord(${index})" class="text-gray-500 hover:text-blue-600 transition-colors flex items-center gap-1 text-sm bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">記録を見る</button>` : ''}
-                    <button onclick="app.editItem(${index})" class="text-gray-500 hover:text-emerald-600 transition-colors flex items-center gap-1 text-sm bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">
+                    <button onclick="event.stopPropagation(); app.editItem(${index})" class="text-gray-500 hover:text-emerald-600 transition-colors flex items-center gap-1 text-sm bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                         編集
                     </button>
-                    <button onclick="app.deleteItem(${index})" class="text-gray-500 hover:text-red-600 transition-colors flex items-center gap-1 text-sm bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">
+                    <button onclick="event.stopPropagation(); app.deleteItem(${index})" class="text-gray-500 hover:text-red-600 transition-colors flex items-center gap-1 text-sm bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3m-9 0h12"></path></svg>
                         削除
                     </button>
@@ -391,6 +435,12 @@ const app = {
 
         const photoUrl = this.safeUrl(item.photoUrl);
         const photoUrls = this.parsePhotoUrls(item.photoUrls);
+        const details = [
+            `<div><span class="text-gray-400">日付</span><div class="font-medium">${this.escapeHtml(this.formatDateRange(item))}</div></div>`,
+            `<div><span class="text-gray-400">目的地</span><div class="font-medium">${this.escapeHtml(item.destination || '-')}</div></div>`,
+            this.hasValue(item.distance) ? `<div><span class="text-gray-400">走行距離</span><div class="font-medium">${this.escapeHtml(item.distance)}km</div></div>` : '',
+            this.hasValue(item.mileage) ? `<div><span class="text-gray-400">燃費</span><div class="font-medium">${this.escapeHtml(item.mileage)}</div></div>` : ''
+        ].filter(Boolean).join('');
         let modal = document.getElementById('record-modal');
 
         if (!modal) {
@@ -409,11 +459,9 @@ const app = {
                 <div class="p-6 overflow-y-auto space-y-5">
                     ${photoUrl ? `<div class="h-48 rounded bg-cover bg-center border border-gray-200" style="background-image: url('${this.escapeHtml(photoUrl)}')"></div>` : ''}
                     <div class="grid grid-cols-2 gap-3 text-sm">
-                        <div><span class="text-gray-400">日付</span><div class="font-medium">${this.formatDate(item.date)}</div></div>
-                        <div><span class="text-gray-400">目的地</span><div class="font-medium">${this.escapeHtml(item.destination || '-')}</div></div>
-                        <div><span class="text-gray-400">走行距離</span><div class="font-medium">${this.escapeHtml(item.distance || 0)}km</div></div>
-                        <div><span class="text-gray-400">燃費</span><div class="font-medium">${this.escapeHtml(item.mileage || '-')}</div></div>
+                        ${details}
                     </div>
+                    ${this.hasValue(item.dailyDistances) ? `<div><div class="text-sm text-gray-400 mb-1">日別走行距離</div><p class="text-sm text-gray-700 whitespace-pre-wrap">${this.escapeHtml(item.dailyDistances)}</p></div>` : ''}
                     ${item.memo ? `<div><div class="text-sm text-gray-400 mb-1">メモ</div><p class="text-sm text-gray-700 whitespace-pre-wrap">${this.escapeHtml(item.memo)}</p></div>` : ''}
                     ${photoUrls.length ? `<div><div class="text-sm text-gray-400 mb-2">追加写真</div><div class="grid grid-cols-2 gap-3">${photoUrls.map(url => `<a href="${this.escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="block h-32 rounded bg-cover bg-center border border-gray-200" style="background-image: url('${this.escapeHtml(url)}')"></a>`).join('')}</div></div>` : ''}
                 </div>
@@ -464,13 +512,17 @@ const app = {
     getFormFields() {
         if (this.currentTab === 'tours') {
             return `
-                <div><label class="block text-sm text-gray-600 mb-1">日付</label><input type="date" name="date" class="w-full border p-2 rounded" required></div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div><label class="block text-sm text-gray-600 mb-1">開始日</label><input type="date" name="date" class="w-full border p-2 rounded"></div>
+                    <div><label class="block text-sm text-gray-600 mb-1">終了日</label><input type="date" name="endDate" class="w-full border p-2 rounded"></div>
+                </div>
                 <div><label class="block text-sm text-gray-600 mb-1">目的地</label><input type="text" name="destination" class="w-full border p-2 rounded" required></div>
                 <div><label class="block text-sm text-gray-600 mb-1">メモ</label><textarea name="memo" class="w-full border p-2 rounded"></textarea></div>
                 <div class="grid grid-cols-2 gap-4">
                     <div><label class="block text-sm text-gray-600 mb-1">走行距離(km)</label><input type="number" name="distance" class="w-full border p-2 rounded"></div>
                     <div><label class="block text-sm text-gray-600 mb-1">燃費</label><input type="number" step="0.1" name="mileage" class="w-full border p-2 rounded"></div>
                 </div>
+                <div><label class="block text-sm text-gray-600 mb-1">日別走行距離</label><textarea name="dailyDistances" class="w-full border p-2 rounded" rows="3" placeholder="1日目 120km&#10;2日目 95km"></textarea></div>
                 <div>
                     <label class="block text-sm text-gray-600 mb-1">写真</label>
                     <input type="file" name="photoFile" accept="image/*" capture="environment" onchange="app.handlePhotoChange(this)" class="w-full border p-2 rounded bg-white">
@@ -728,6 +780,7 @@ const app = {
                     sheet: this.currentTab,
                     rowIndex,
                     id: item.id || '',
+                    legacyKey: this.recordKey(item),
                     deletedAt: new Date().toISOString(),
                     deletePhotos: true,
                     photoUrls: this.allPhotoUrls(item)
@@ -794,6 +847,8 @@ const app = {
                     data: {
                         sheet: this.currentTab,
                         rowIndex,
+                        id: oldItem?.id || '',
+                        legacyKey: this.recordKey(oldItem),
                         deletedAt: new Date().toISOString()
                     }
                 });

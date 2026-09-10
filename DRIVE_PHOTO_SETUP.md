@@ -2,13 +2,13 @@
 
 ## 1. Spreadsheet columns
 
-In the `tours` sheet, add this header at the end of the first row:
+The current `tours` sheet columns are:
 
 ```text
-photoUrls
+id, date, endDate, destination, memo, distance, dailyDistances, mileage, photoUrl, photoUrls
 ```
 
-`photoUrl` is used for the cover photo. `photoUrls` is used for additional photos.
+The latest Apps Script can add missing columns automatically when saving. `date` is the start date, `endDate` is the end date, `photoUrl` is used for the cover photo, and `photoUrls` is used for additional photos.
 
 ## 2. Apps Script
 

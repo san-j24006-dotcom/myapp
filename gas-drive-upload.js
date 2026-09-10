@@ -139,7 +139,7 @@ function markDeleted(postData) {
 
   if (!sheet) {
     sheet = spreadsheet.insertSheet('deleted');
-    sheet.appendRow(['sheet', 'rowIndex', 'deletedAt', 'id']);
+    sheet.appendRow(['sheet', 'rowIndex', 'deletedAt', 'id', 'legacyKey']);
   }
 
   var data = postData.data || {};
@@ -147,7 +147,8 @@ function markDeleted(postData) {
     sheet: data.sheet || postData.sheet || '',
     rowIndex: data.rowIndex || '',
     deletedAt: new Date().toISOString(),
-    id: data.id || ''
+    id: data.id || '',
+    legacyKey: data.legacyKey || ''
   };
   var headers = ensureHeaders(sheet, deletedData);
   var row = headers.map(function (header) {
@@ -275,12 +276,21 @@ function parsePhotoUrlList(value) {
 
 function buildRecordName(rowData) {
   var date = rowData.date || rowData.dueDate || '';
+  var endDate = rowData.endDate || '';
   if (date instanceof Date) {
     date = Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   }
+  if (endDate instanceof Date) {
+    endDate = Utilities.formatDate(endDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+
+  var dateLabel = date || endDate;
+  if (date && endDate && date !== endDate) {
+    dateLabel = date + '-' + endDate;
+  }
 
   var name = rowData.destination || rowData.name || rowData.task || rowData.memo || unicodeText('unclassified');
-  return String((date ? date + ' ' : '') + name).trim();
+  return String((dateLabel ? dateLabel + ' ' : '') + name).trim();
 }
 
 function uploadPhoto(data) {
