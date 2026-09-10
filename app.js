@@ -25,7 +25,7 @@ const app = {
 
     emptyRecordForCurrentTab() {
         const fields = {
-            tours: ['date', 'destination', 'memo', 'distance', 'mileage', 'photoUrl'],
+            tours: ['date', 'destination', 'memo', 'distance', 'mileage', 'photoUrl', 'photoUrls'],
             spots: ['name', 'status', 'type', 'mapUrl'],
             parts: ['name', 'category', 'price', 'status'],
             reminders: ['task', 'dueDate', 'status']
@@ -59,10 +59,28 @@ const app = {
         }
     },
 
-    async fileToImageDataUrl(file) {
+    parsePhotoUrls(value) {
+        if (!value) return [];
+
+        try {
+            const urls = JSON.parse(value);
+            if (Array.isArray(urls)) {
+                return urls.map(url => this.safeUrl(url)).filter(Boolean);
+            }
+        } catch {
+            return String(value)
+                .split(/\n|,/)
+                .map(url => this.safeUrl(url.trim()))
+                .filter(Boolean);
+        }
+
+        return [];
+    },
+
+    async fileToImageDataUrl(file, options = {}) {
         if (!file || !file.type.startsWith('image/')) return '';
 
-        const maxBytes = 45000;
+        const maxBytes = options.maxBytes || 45000;
         const objectUrl = URL.createObjectURL(file);
 
         try {
@@ -75,8 +93,8 @@ const app = {
 
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
-            let maxSize = 900;
-            let quality = 0.72;
+            let maxSize = options.maxSize || 900;
+            let quality = options.quality || 0.72;
             let dataUrl = '';
 
             for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -103,6 +121,35 @@ const app = {
         } finally {
             URL.revokeObjectURL(objectUrl);
         }
+    },
+
+    async fileToDriveDataUrl(file) {
+        return this.fileToImageDataUrl(file, {
+            maxBytes: 2500000,
+            maxSize: 1800,
+            quality: 0.82
+        });
+    },
+
+    async uploadPhotoFile(file) {
+        const driveDataUrl = await this.fileToDriveDataUrl(file);
+
+        try {
+            const result = await this.sendPayload({
+                action: 'uploadPhoto',
+                data: {
+                    fileName: file.name || `motolog-${Date.now()}.jpg`,
+                    mimeType: 'image/jpeg',
+                    dataUrl: driveDataUrl
+                }
+            });
+
+            if (result.url) return result.url;
+        } catch {
+            // GASがDriveアップロード未対応の場合は、従来通り軽量化した画像を保存する。
+        }
+
+        return this.fileToImageDataUrl(file);
     },
 
     formatDate(value) {
@@ -216,12 +263,14 @@ const app = {
             card.className = 'bg-white rounded-xl shadow-sm border border-gray-100 p-5 card-hover relative overflow-hidden pb-16';
 
             const photoUrl = this.safeUrl(item.photoUrl);
+            const photoUrls = this.parsePhotoUrls(item.photoUrls);
             const mapUrl = this.safeUrl(item.mapUrl);
             let inner = '';
 
             if (this.currentTab === 'tours') {
                 inner = `
                     ${photoUrl ? `<div class="h-32 -mx-5 -mt-5 mb-4 bg-cover bg-center" style="background-image: url('${this.escapeHtml(photoUrl)}')"></div>` : ''}
+                    ${photoUrls.length ? `<div class="flex gap-2 mb-4 overflow-x-auto">${photoUrls.map(url => `<div class="h-16 w-20 shrink-0 rounded bg-cover bg-center border border-gray-200" style="background-image: url('${this.escapeHtml(url)}')"></div>`).join('')}</div>` : ''}
                     <div class="text-xs text-gray-400 mb-1">${this.formatDate(item.date)}</div>
                     <h3 class="text-lg font-bold text-gray-800 mb-2">${this.escapeHtml(item.destination || '目的地なし')}</h3>
                     <p class="text-gray-600 text-sm mb-3 line-clamp-2">${this.escapeHtml(item.memo)}</p>
@@ -291,6 +340,7 @@ const app = {
 
         document.getElementById('form-fields').innerHTML = this.getFormFields();
         this.updatePhotoPreview('');
+        this.updateExtraPhotoPreview('');
     },
 
     getFormFields() {
@@ -312,6 +362,13 @@ const app = {
                         <button type="button" onclick="app.clearPhoto()" class="mt-2 text-sm text-red-600 hover:underline">写真を削除</button>
                     </div>
                     <p class="text-xs text-gray-500 mt-1">選択した画像は軽く圧縮して保存します。</p>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Additional photos</label>
+                    <input type="file" name="extraPhotoFiles" accept="image/*" capture="environment" multiple onchange="app.handleExtraPhotoChange(this)" class="w-full border p-2 rounded bg-white">
+                    <input type="hidden" name="photoUrls">
+                    <div id="extra-photo-preview" class="hidden mt-3 flex gap-2 overflow-x-auto"></div>
+                    <button type="button" onclick="app.clearExtraPhotos()" class="mt-2 text-sm text-red-600 hover:underline">Clear additional photos</button>
                 </div>
             `;
         }
@@ -378,6 +435,7 @@ const app = {
             });
 
             this.updatePhotoPreview(item.photoUrl || '');
+            this.updateExtraPhotoPreview(item.photoUrls || '');
         }, 20);
     },
 
@@ -392,9 +450,9 @@ const app = {
         }
 
         try {
-            const dataUrl = await this.fileToImageDataUrl(file);
-            hiddenInput.value = dataUrl;
-            this.updatePhotoPreview(dataUrl);
+            const photoValue = await this.uploadPhotoFile(file);
+            hiddenInput.value = photoValue;
+            this.updatePhotoPreview(photoValue);
         } catch (error) {
             input.value = '';
             alert(error.message);
@@ -408,6 +466,36 @@ const app = {
         this.updatePhotoPreview('');
     },
 
+    async handleExtraPhotoChange(input) {
+        const form = document.getElementById('data-form');
+        const hiddenInput = form.elements.photoUrls;
+        const files = Array.from(input.files || []);
+
+        if (!files.length) {
+            this.updateExtraPhotoPreview(hiddenInput.value);
+            return;
+        }
+
+        try {
+            const urls = [];
+            for (const file of files) {
+                urls.push(await this.uploadPhotoFile(file));
+            }
+            hiddenInput.value = JSON.stringify(urls);
+            this.updateExtraPhotoPreview(hiddenInput.value);
+        } catch (error) {
+            input.value = '';
+            alert(error.message);
+        }
+    },
+
+    clearExtraPhotos() {
+        const form = document.getElementById('data-form');
+        if (form.elements.extraPhotoFiles) form.elements.extraPhotoFiles.value = '';
+        if (form.elements.photoUrls) form.elements.photoUrls.value = '';
+        this.updateExtraPhotoPreview('');
+    },
+
     updatePhotoPreview(photoUrl) {
         const preview = document.getElementById('photo-preview');
         if (!preview) return;
@@ -416,6 +504,17 @@ const app = {
         const safePhotoUrl = this.safeUrl(photoUrl);
         preview.classList.toggle('hidden', !safePhotoUrl);
         image.style.backgroundImage = safePhotoUrl ? `url("${safePhotoUrl.replace(/"/g, '\\"')}")` : '';
+    },
+
+    updateExtraPhotoPreview(photoUrls) {
+        const preview = document.getElementById('extra-photo-preview');
+        if (!preview) return;
+
+        const urls = this.parsePhotoUrls(photoUrls);
+        preview.classList.toggle('hidden', !urls.length);
+        preview.innerHTML = urls.map(url => (
+            `<div class="h-16 w-20 shrink-0 rounded bg-cover bg-center border border-gray-200" style="background-image: url('${this.escapeHtml(url)}')"></div>`
+        )).join('');
     },
 
     closeModal() {
@@ -479,10 +578,20 @@ const app = {
             const formData = new FormData(form);
             const data = Object.fromEntries(formData.entries());
             delete data.photoFile;
+            delete data.extraPhotoFiles;
 
             const photoFile = form.elements.photoFile?.files?.[0];
-            if (photoFile) {
-                data.photoUrl = await this.fileToImageDataUrl(photoFile);
+            if (photoFile && !data.photoUrl) {
+                data.photoUrl = await this.uploadPhotoFile(photoFile);
+            }
+
+            const extraPhotoFiles = Array.from(form.elements.extraPhotoFiles?.files || []);
+            if (extraPhotoFiles.length && !data.photoUrls) {
+                const urls = [];
+                for (const file of extraPhotoFiles) {
+                    urls.push(await this.uploadPhotoFile(file));
+                }
+                data.photoUrls = JSON.stringify(urls);
             }
 
             const payload = {
