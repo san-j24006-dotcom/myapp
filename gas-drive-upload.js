@@ -60,6 +60,10 @@ function doPost(e) {
       return markDeleted(postData);
     }
 
+    if (postData.action === 'deletePhotos') {
+      return deletePhotos((postData.data || {}).photoUrls || []);
+    }
+
     return addRow(postData);
   } catch (error) {
     return createJsonResponse({ error: error.message });
@@ -98,7 +102,52 @@ function markDeleted(postData) {
 
   var data = postData.data || {};
   sheet.appendRow([data.sheet || postData.sheet || '', data.rowIndex || '', new Date().toISOString()]);
+
+  if (data.deletePhotos !== false && data.photoUrls) {
+    deletePhotos(data.photoUrls);
+  }
+
   return createJsonResponse({ success: true, message: 'Deleted marker added' });
+}
+
+function deletePhotos(photoUrls) {
+  var urls = Array.isArray(photoUrls) ? photoUrls : [photoUrls];
+  var deletedIds = [];
+  var errors = [];
+
+  urls.forEach(function (url) {
+    var fileId = extractDriveFileId(url);
+    if (!fileId) return;
+
+    try {
+      DriveApp.getFileById(fileId).setTrashed(true);
+      deletedIds.push(fileId);
+    } catch (error) {
+      errors.push({ id: fileId, message: error.message });
+    }
+  });
+
+  return createJsonResponse({
+    success: errors.length === 0,
+    deletedIds: deletedIds,
+    errors: errors
+  });
+}
+
+function extractDriveFileId(url) {
+  var value = String(url || '');
+  var patterns = [
+    /[?&]id=([a-zA-Z0-9_-]+)/,
+    /\/file\/d\/([a-zA-Z0-9_-]+)/,
+    /\/d\/([a-zA-Z0-9_-]+)/
+  ];
+
+  for (var i = 0; i < patterns.length; i++) {
+    var match = value.match(patterns[i]);
+    if (match) return match[1];
+  }
+
+  return '';
 }
 
 function uploadPhoto(data) {

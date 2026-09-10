@@ -3,6 +3,7 @@ const app = {
     data: [],
     editIndex: null,
     deletedRows: new Set(),
+    removedPhotoUrls: new Set(),
 
     labels: {
         tours: 'ツーリング記録',
@@ -75,6 +76,17 @@ const app = {
         }
 
         return [];
+    },
+
+    allPhotoUrls(item) {
+        return [
+            this.safeUrl(item?.photoUrl),
+            ...this.parsePhotoUrls(item?.photoUrls)
+        ].filter(Boolean);
+    },
+
+    isDrivePhotoUrl(url) {
+        return /drive\.google\.com\/(?:thumbnail|uc|file\/d\/|open)/i.test(url);
     },
 
     async fileToImageDataUrl(file, options = {}) {
@@ -260,17 +272,15 @@ const app = {
 
         this.data.forEach((item, index) => {
             const card = document.createElement('div');
-            card.className = 'bg-white rounded-xl shadow-sm border border-gray-100 p-5 card-hover relative overflow-hidden pb-16';
+            card.className = 'bg-white rounded-xl shadow-sm border border-gray-100 p-5 card-hover relative overflow-hidden pb-20';
 
             const photoUrl = this.safeUrl(item.photoUrl);
-            const photoUrls = this.parsePhotoUrls(item.photoUrls);
             const mapUrl = this.safeUrl(item.mapUrl);
             let inner = '';
 
             if (this.currentTab === 'tours') {
                 inner = `
                     ${photoUrl ? `<div class="h-32 -mx-5 -mt-5 mb-4 bg-cover bg-center" style="background-image: url('${this.escapeHtml(photoUrl)}')"></div>` : ''}
-                    ${photoUrls.length ? `<div class="flex gap-2 mb-4 overflow-x-auto">${photoUrls.map(url => `<div class="h-16 w-20 shrink-0 rounded bg-cover bg-center border border-gray-200" style="background-image: url('${this.escapeHtml(url)}')"></div>`).join('')}</div>` : ''}
                     <div class="text-xs text-gray-400 mb-1">${this.formatDate(item.date)}</div>
                     <h3 class="text-lg font-bold text-gray-800 mb-2">${this.escapeHtml(item.destination || '目的地なし')}</h3>
                     <p class="text-gray-600 text-sm mb-3 line-clamp-2">${this.escapeHtml(item.memo)}</p>
@@ -308,7 +318,8 @@ const app = {
             }
 
             inner += `
-                <div class="absolute bottom-4 right-4 flex gap-2">
+                <div class="absolute bottom-4 right-4 left-4 flex flex-wrap justify-end gap-2">
+                    ${this.currentTab === 'tours' ? `<button onclick="app.showRecord(${index})" class="text-gray-500 hover:text-blue-600 transition-colors flex items-center gap-1 text-sm bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">記録を見る</button>` : ''}
                     <button onclick="app.editItem(${index})" class="text-gray-500 hover:text-emerald-600 transition-colors flex items-center gap-1 text-sm bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                         編集
@@ -325,8 +336,64 @@ const app = {
         });
     },
 
+    showRecord(index) {
+        const item = this.data[index];
+        if (!item) return;
+
+        const photoUrl = this.safeUrl(item.photoUrl);
+        const photoUrls = this.parsePhotoUrls(item.photoUrls);
+        let modal = document.getElementById('record-modal');
+
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'record-modal';
+            modal.className = 'fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50 p-4 opacity-0 transition-opacity';
+            document.body.appendChild(modal);
+        }
+
+        modal.innerHTML = `
+            <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[calc(100dvh-2rem)] overflow-hidden transform scale-95 transition-transform flex flex-col">
+                <div class="p-6 border-b border-gray-100 flex justify-between items-center">
+                    <h3 class="text-lg font-bold">${this.escapeHtml(item.destination || '記録')}</h3>
+                    <button onclick="app.closeRecordModal()" class="text-gray-400 hover:text-gray-700">閉じる</button>
+                </div>
+                <div class="p-6 overflow-y-auto space-y-5">
+                    ${photoUrl ? `<div class="h-48 rounded bg-cover bg-center border border-gray-200" style="background-image: url('${this.escapeHtml(photoUrl)}')"></div>` : ''}
+                    <div class="grid grid-cols-2 gap-3 text-sm">
+                        <div><span class="text-gray-400">日付</span><div class="font-medium">${this.formatDate(item.date)}</div></div>
+                        <div><span class="text-gray-400">目的地</span><div class="font-medium">${this.escapeHtml(item.destination || '-')}</div></div>
+                        <div><span class="text-gray-400">走行距離</span><div class="font-medium">${this.escapeHtml(item.distance || 0)}km</div></div>
+                        <div><span class="text-gray-400">燃費</span><div class="font-medium">${this.escapeHtml(item.mileage || '-')}</div></div>
+                    </div>
+                    ${item.memo ? `<div><div class="text-sm text-gray-400 mb-1">メモ</div><p class="text-sm text-gray-700 whitespace-pre-wrap">${this.escapeHtml(item.memo)}</p></div>` : ''}
+                    ${photoUrls.length ? `<div><div class="text-sm text-gray-400 mb-2">追加写真</div><div class="grid grid-cols-2 gap-3">${photoUrls.map(url => `<a href="${this.escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="block h-32 rounded bg-cover bg-center border border-gray-200" style="background-image: url('${this.escapeHtml(url)}')"></a>`).join('')}</div></div>` : ''}
+                </div>
+            </div>
+        `;
+
+        const content = modal.querySelector('div');
+        modal.classList.add('modal-show');
+        setTimeout(() => {
+            modal.classList.add('modal-fade-in');
+            content.classList.add('modal-scale-in');
+        }, 10);
+    },
+
+    closeRecordModal() {
+        const modal = document.getElementById('record-modal');
+        if (!modal) return;
+
+        const content = modal.querySelector('div');
+        modal.classList.remove('modal-fade-in');
+        content.classList.remove('modal-scale-in');
+        setTimeout(() => {
+            modal.classList.remove('modal-show');
+        }, 300);
+    },
+
     showModal(isEdit = false) {
         this.editIndex = isEdit ? this.editIndex : null;
+        this.removedPhotoUrls = new Set();
         const titleEl = document.getElementById('modal-title');
         if (titleEl) titleEl.textContent = isEdit ? '編集' : '新規追加';
 
@@ -364,11 +431,11 @@ const app = {
                     <p class="text-xs text-gray-500 mt-1">選択した画像は軽く圧縮して保存します。</p>
                 </div>
                 <div>
-                    <label class="block text-sm text-gray-600 mb-1">Additional photos</label>
+                    <label class="block text-sm text-gray-600 mb-1">追加写真</label>
                     <input type="file" name="extraPhotoFiles" accept="image/*" capture="environment" multiple onchange="app.handleExtraPhotoChange(this)" class="w-full border p-2 rounded bg-white">
                     <input type="hidden" name="photoUrls">
                     <div id="extra-photo-preview" class="hidden mt-3 flex gap-2 overflow-x-auto"></div>
-                    <button type="button" onclick="app.clearExtraPhotos()" class="mt-2 text-sm text-red-600 hover:underline">Clear additional photos</button>
+                    <button type="button" onclick="app.clearExtraPhotos()" class="mt-2 text-sm text-red-600 hover:underline">追加写真をすべて削除</button>
                 </div>
             `;
         }
@@ -477,7 +544,7 @@ const app = {
         }
 
         try {
-            const urls = [];
+            const urls = this.parsePhotoUrls(hiddenInput.value);
             for (const file of files) {
                 urls.push(await this.uploadPhotoFile(file));
             }
@@ -491,9 +558,25 @@ const app = {
 
     clearExtraPhotos() {
         const form = document.getElementById('data-form');
+        const urls = this.parsePhotoUrls(form.elements.photoUrls?.value);
+        urls.forEach(url => this.removedPhotoUrls.add(url));
         if (form.elements.extraPhotoFiles) form.elements.extraPhotoFiles.value = '';
         if (form.elements.photoUrls) form.elements.photoUrls.value = '';
         this.updateExtraPhotoPreview('');
+    },
+
+    removeExtraPhoto(index) {
+        const form = document.getElementById('data-form');
+        const hiddenInput = form.elements.photoUrls;
+        const urls = this.parsePhotoUrls(hiddenInput.value);
+        const [removedUrl] = urls.splice(index, 1);
+
+        if (removedUrl) {
+            this.removedPhotoUrls.add(removedUrl);
+        }
+
+        hiddenInput.value = JSON.stringify(urls);
+        this.updateExtraPhotoPreview(hiddenInput.value);
     },
 
     updatePhotoPreview(photoUrl) {
@@ -512,8 +595,8 @@ const app = {
 
         const urls = this.parsePhotoUrls(photoUrls);
         preview.classList.toggle('hidden', !urls.length);
-        preview.innerHTML = urls.map(url => (
-            `<div class="h-16 w-20 shrink-0 rounded bg-cover bg-center border border-gray-200" style="background-image: url('${this.escapeHtml(url)}')"></div>`
+        preview.innerHTML = urls.map((url, index) => (
+            `<div class="relative h-16 w-20 shrink-0 rounded bg-cover bg-center border border-gray-200" style="background-image: url('${this.escapeHtml(url)}')"><button type="button" onclick="app.removeExtraPhoto(${index})" class="absolute right-1 top-1 rounded bg-white/90 px-1.5 py-0.5 text-xs text-red-600 shadow">削除</button></div>`
         )).join('');
     },
 
@@ -540,6 +623,34 @@ const app = {
         return result;
     },
 
+    async deleteDrivePhotos(urls) {
+        const driveUrls = [...new Set((urls || []).filter(url => this.isDrivePhotoUrl(url)))];
+        if (!driveUrls.length) return;
+
+        try {
+            await this.sendPayload({
+                action: 'deletePhotos',
+                data: {
+                    photoUrls: driveUrls
+                }
+            });
+        } catch (error) {
+            console.warn('Drive photo deletion failed:', error);
+        }
+    },
+
+    changedDrivePhotos(oldItem, newData) {
+        const oldCover = this.safeUrl(oldItem?.photoUrl);
+        const newCover = this.safeUrl(newData?.photoUrl);
+        const removed = [...this.removedPhotoUrls];
+
+        if (oldCover && oldCover !== newCover) {
+            removed.push(oldCover);
+        }
+
+        return removed.filter(url => this.isDrivePhotoUrl(url));
+    },
+
     async deleteItem(index) {
         const item = this.data[index];
         const label = item.destination || item.name || item.task || this.labels[this.currentTab];
@@ -549,12 +660,14 @@ const app = {
         try {
             const rowIndex = item.__rowIndex || index + 2;
             await this.sendPayload({
-                action: 'add',
+                action: 'delete',
                 sheet: 'deleted',
                 data: {
                     sheet: this.currentTab,
                     rowIndex,
-                    deletedAt: new Date().toISOString()
+                    deletedAt: new Date().toISOString(),
+                    deletePhotos: true,
+                    photoUrls: this.allPhotoUrls(item)
                 }
             });
             await this.fetchData();
@@ -598,6 +711,7 @@ const app = {
                 sheet: this.currentTab,
                 data
             };
+            const oldItem = this.editIndex !== null ? this.data[this.editIndex] : null;
 
             if (this.editIndex !== null) {
                 const rowIndex = this.data[this.editIndex]?.__rowIndex || this.editIndex + 2;
@@ -618,6 +732,10 @@ const app = {
             }
 
             await this.sendPayload(payload);
+
+            if (oldItem) {
+                await this.deleteDrivePhotos(this.changedDrivePhotos(oldItem, data));
+            }
 
             this.closeModal();
             form.reset();

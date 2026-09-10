@@ -54,4 +54,6 @@ After the deployment is updated:
 - The cover photo upload stores one image in Google Drive.
 - Additional photos can be selected together and are also stored in Google Drive.
 - The spreadsheet stores only image URLs.
+- Deleting a record moves its Google Drive photos to the trash.
+- Removing an individual additional photo and saving also moves that photo to the trash.
 - If the new GAS upload endpoint is not ready yet, the app falls back to the previous compressed-image save method.
