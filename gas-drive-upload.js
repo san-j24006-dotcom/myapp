@@ -180,15 +180,17 @@ function deletePhotos(photoUrls) {
 
 function extractDriveFileId(url) {
   var value = String(url || '');
-  var patterns = [
-    /[?&]id=([a-zA-Z0-9_-]+)/,
-    /\/file\/d\/([a-zA-Z0-9_-]+)/,
-    /\/d\/([a-zA-Z0-9_-]+)/
-  ];
 
-  for (var i = 0; i < patterns.length; i++) {
-    var match = value.match(patterns[i]);
-    if (match) return match[1];
+  if (value.indexOf('id=') !== -1) {
+    return value.split('id=')[1].split('&')[0];
+  }
+
+  if (value.indexOf('/file/d/') !== -1) {
+    return value.split('/file/d/')[1].split('/')[0];
+  }
+
+  if (value.indexOf('/d/') !== -1) {
+    return value.split('/d/')[1].split('/')[0];
   }
 
   return '';
@@ -311,15 +313,23 @@ function getOrCreateFolder(parent, name) {
 }
 
 function sanitizeFileName(fileName) {
-  return String(fileName)
-    .replace(/[\\/:*?"<>|#%{}~&]/g, '-')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 120);
+  var value = String(fileName || '');
+  var invalidChars = ['\\', '/', ':', '*', '?', '"', '<', '>', '|', '#', '%', '{', '}', '~', '&'];
+
+  invalidChars.forEach(function (char) {
+    value = value.split(char).join('-');
+  });
+
+  return value.split(/\s+/).join(' ').trim().slice(0, 120);
 }
 
 function sanitizeFolderName(folderName) {
-  var value = sanitizeFileName(folderName).replace(/\.+$/g, '').trim();
+  var value = sanitizeFileName(folderName).trim();
+
+  while (value.endsWith('.')) {
+    value = value.slice(0, -1).trim();
+  }
+
   return value || '未分類';
 }
 
