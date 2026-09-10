@@ -447,8 +447,19 @@ const app = {
             };
 
             if (this.editIndex !== null) {
-                payload.action = 'edit';
-                payload.rowIndex = this.data[this.editIndex]?.__rowIndex || this.editIndex + 2;
+                const rowIndex = this.data[this.editIndex]?.__rowIndex || this.editIndex + 2;
+
+                await this.sendPayload({
+                    action: 'add',
+                    sheet: 'deleted',
+                    data: {
+                        sheet: this.currentTab,
+                        rowIndex,
+                        deletedAt: new Date().toISOString()
+                    }
+                });
+
+                payload.action = 'add';
             } else {
                 payload.action = 'add';
             }
