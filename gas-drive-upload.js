@@ -1,5 +1,10 @@
 const PHOTO_FOLDER_ID = '19pnCmseZGW9Oo5QaiFtsNjliOWdzGFp0';
 
+function authorize() {
+  SpreadsheetApp.getActiveSpreadsheet().getName();
+  DriveApp.getFolderById(PHOTO_FOLDER_ID).getName();
+}
+
 function doGet(e) {
   var sheetName = (e && e.parameter && e.parameter.sheet) || 'tours';
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
