@@ -5,6 +5,50 @@ function authorize() {
   DriveApp.getFolderById(PHOTO_FOLDER_ID).getName();
 }
 
+function organizeExistingPhotos() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetNames = ['tours', 'spots', 'parts', 'reminders'];
+  var movedCount = 0;
+
+  sheetNames.forEach(function (sheetName) {
+    var sheet = spreadsheet.getSheetByName(sheetName);
+    if (!sheet) return;
+
+    var data = sheet.getDataRange().getValues();
+    if (data.length <= 1) return;
+
+    var headers = data[0].map(function (header) {
+      return String(header || '').trim();
+    });
+
+    for (var i = 1; i < data.length; i++) {
+      var rowData = rowToObject(headers, data[i]);
+      var urls = getRowPhotoUrls(rowData);
+      if (!urls.length) continue;
+
+      var folder = getPhotoFolder({
+        sheet: sheetName,
+        category: folderLabelForSheet(sheetName),
+        recordName: buildRecordName(rowData)
+      });
+
+      urls.forEach(function (url) {
+        var fileId = extractDriveFileId(url);
+        if (!fileId) return;
+
+        try {
+          DriveApp.getFileById(fileId).moveTo(folder);
+          movedCount += 1;
+        } catch (error) {
+          Logger.log('Move failed: ' + fileId + ' / ' + error.message);
+        }
+      });
+    }
+  });
+
+  Logger.log('Moved photos: ' + movedCount);
+}
+
 function doGet(e) {
   var sheetName = (e && e.parameter && e.parameter.sheet) || 'tours';
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -148,6 +192,57 @@ function extractDriveFileId(url) {
   }
 
   return '';
+}
+
+function rowToObject(headers, row) {
+  var obj = {};
+
+  for (var i = 0; i < headers.length; i++) {
+    if (headers[i]) {
+      obj[headers[i]] = row[i];
+    }
+  }
+
+  return obj;
+}
+
+function getRowPhotoUrls(rowData) {
+  return [].concat(
+    parsePhotoUrlList(rowData.photoUrl),
+    parsePhotoUrlList(rowData.photoUrls)
+  );
+}
+
+function parsePhotoUrlList(value) {
+  if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  var text = String(value);
+
+  try {
+    var parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch (error) {
+  }
+
+  return text.split(/\n|,/).map(function (url) {
+    return url.trim();
+  }).filter(Boolean);
+}
+
+function buildRecordName(rowData) {
+  var date = rowData.date || rowData.dueDate || '';
+  if (date instanceof Date) {
+    date = Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+
+  var name = rowData.destination || rowData.name || rowData.task || rowData.memo || '未分類';
+  return String((date ? date + ' ' : '') + name).trim();
 }
 
 function uploadPhoto(data) {

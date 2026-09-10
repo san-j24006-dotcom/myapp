@@ -47,7 +47,17 @@ Who has access: Anyone
 
 Then deploy or update the deployment. On the first run, approve Google Drive and spreadsheet permissions.
 
-## 4. App behavior
+## 4. Organize existing photos
+
+If photos were already uploaded before this folder structure was added, run this function once in Apps Script:
+
+```text
+organizeExistingPhotos
+```
+
+It moves existing Drive photos into category and record folders.
+
+## 5. App behavior
 
 After the deployment is updated:
 
