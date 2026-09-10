@@ -290,6 +290,7 @@ const app = {
         }, 10);
 
         document.getElementById('form-fields').innerHTML = this.getFormFields();
+        this.updatePhotoPreview('');
     },
 
     getFormFields() {
@@ -304,8 +305,12 @@ const app = {
                 </div>
                 <div>
                     <label class="block text-sm text-gray-600 mb-1">写真</label>
-                    <input type="file" name="photoFile" accept="image/*" capture="environment" class="w-full border p-2 rounded bg-white">
+                    <input type="file" name="photoFile" accept="image/*" capture="environment" onchange="app.handlePhotoChange(this)" class="w-full border p-2 rounded bg-white">
                     <input type="hidden" name="photoUrl">
+                    <div id="photo-preview" class="hidden mt-3">
+                        <div class="h-32 rounded bg-cover bg-center border border-gray-200"></div>
+                        <button type="button" onclick="app.clearPhoto()" class="mt-2 text-sm text-red-600 hover:underline">写真を削除</button>
+                    </div>
                     <p class="text-xs text-gray-500 mt-1">選択した画像は軽く圧縮して保存します。</p>
                 </div>
             `;
@@ -371,7 +376,46 @@ const app = {
                     input.value = input.type === 'date' ? this.toDateInputValue(item[key]) : item[key];
                 }
             });
+
+            this.updatePhotoPreview(item.photoUrl || '');
         }, 20);
+    },
+
+    async handlePhotoChange(input) {
+        const form = document.getElementById('data-form');
+        const hiddenInput = form.elements.photoUrl;
+        const file = input.files?.[0];
+
+        if (!file) {
+            this.updatePhotoPreview(hiddenInput.value);
+            return;
+        }
+
+        try {
+            const dataUrl = await this.fileToImageDataUrl(file);
+            hiddenInput.value = dataUrl;
+            this.updatePhotoPreview(dataUrl);
+        } catch (error) {
+            input.value = '';
+            alert(error.message);
+        }
+    },
+
+    clearPhoto() {
+        const form = document.getElementById('data-form');
+        if (form.elements.photoFile) form.elements.photoFile.value = '';
+        if (form.elements.photoUrl) form.elements.photoUrl.value = '';
+        this.updatePhotoPreview('');
+    },
+
+    updatePhotoPreview(photoUrl) {
+        const preview = document.getElementById('photo-preview');
+        if (!preview) return;
+
+        const image = preview.querySelector('div');
+        const safePhotoUrl = this.safeUrl(photoUrl);
+        preview.classList.toggle('hidden', !safePhotoUrl);
+        image.style.backgroundImage = safePhotoUrl ? `url("${safePhotoUrl.replace(/"/g, '\\"')}")` : '';
     },
 
     closeModal() {
