@@ -5,10 +5,10 @@
 The current `tours` sheet columns are:
 
 ```text
-id, date, endDate, destination, memo, distance, dailyDistances, mileage, photoUrl, photoUrls
+id, date, endDate, destination, memo, distance, dailyDistances, fuelEntries, fuelTotal, photoUrl, photoUrls
 ```
 
-The latest Apps Script can add missing columns automatically when saving. `date` is the start date, `endDate` is the end date, `photoUrl` is used for the cover photo, and `photoUrls` is used for additional photos.
+The latest Apps Script can add missing columns automatically when saving. `date` is the start date, `endDate` is the end date, `dailyDistances` stores per-day distances, `fuelEntries` stores fuel price/liter entries, `fuelTotal` stores the calculated fuel cost, `photoUrl` is used for the cover photo, and `photoUrls` is used for additional photos.
 
 ## 2. Apps Script
 

@@ -31,7 +31,7 @@ const app = {
 
     emptyRecordForCurrentTab() {
         const fields = {
-            tours: ['id', 'date', 'endDate', 'destination', 'memo', 'distance', 'dailyDistances', 'mileage', 'photoUrl', 'photoUrls'],
+            tours: ['id', 'date', 'endDate', 'destination', 'memo', 'distance', 'dailyDistances', 'fuelEntries', 'fuelTotal', 'photoUrl', 'photoUrls'],
             spots: ['id', 'name', 'status', 'type', 'mapUrl'],
             parts: ['id', 'name', 'category', 'price', 'status'],
             reminders: ['id', 'task', 'dueDate', 'status']
@@ -111,6 +111,8 @@ const app = {
             item.distance,
             item.dailyDistances,
             item.mileage,
+            item.fuelEntries,
+            item.fuelTotal,
             item.photoUrl,
             item.photoUrls
         ].map(value => String(value ?? '').trim()).join('|');
@@ -230,6 +232,94 @@ const app = {
         }
 
         return startDate || endDate || '日付未定';
+    },
+
+    dateRange(startValue, endValue) {
+        const startDate = this.toDateInputValue(startValue);
+        const endDate = this.toDateInputValue(endValue);
+        const firstDate = startDate || endDate;
+        const lastDate = endDate || startDate;
+
+        if (!firstDate) return [];
+
+        const start = new Date(`${firstDate}T00:00:00`);
+        const end = new Date(`${lastDate}T00:00:00`);
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return [];
+
+        const from = start <= end ? start : end;
+        const to = start <= end ? end : start;
+        const dates = [];
+
+        for (let date = new Date(from); date <= to && dates.length < 45; date.setDate(date.getDate() + 1)) {
+            dates.push(this.toDateInputValue(date));
+        }
+
+        return dates;
+    },
+
+    formatShortDate(value) {
+        const date = new Date(`${this.toDateInputValue(value)}T00:00:00`);
+        if (Number.isNaN(date.getTime())) return '';
+        return `${date.getMonth() + 1}/${date.getDate()}`;
+    },
+
+    parseDailyDistances(value) {
+        if (!value) return [];
+
+        try {
+            const items = JSON.parse(value);
+            if (Array.isArray(items)) {
+                return items.map(item => ({
+                    date: this.toDateInputValue(item.date),
+                    distance: String(item.distance ?? '').trim()
+                })).filter(item => item.date || item.distance);
+            }
+        } catch {
+            return String(value).split(/\n/).map(line => {
+                const [date, distance] = line.split(':');
+                return {
+                    date: this.toDateInputValue(date?.trim()),
+                    distance: String(distance ?? date ?? '').replace(/[^\d.]/g, '').trim()
+                };
+            }).filter(item => item.date || item.distance);
+        }
+
+        return [];
+    },
+
+    dailyDistanceTotal(value) {
+        return this.parseDailyDistances(value).reduce((total, item) => (
+            total + (Number(item.distance) || 0)
+        ), 0);
+    },
+
+    parseFuelEntries(value) {
+        if (!value) return [];
+
+        try {
+            const items = JSON.parse(value);
+            if (Array.isArray(items)) {
+                return items.map(item => ({
+                    unitPrice: String(item.unitPrice ?? '').trim(),
+                    liters: String(item.liters ?? '').trim()
+                })).filter(item => item.unitPrice || item.liters);
+            }
+        } catch {
+        }
+
+        return [];
+    },
+
+    fuelEntryTotal(entry) {
+        return Math.round((Number(entry.unitPrice) || 0) * (Number(entry.liters) || 0));
+    },
+
+    fuelTotal(value) {
+        return this.parseFuelEntries(value).reduce((total, entry) => total + this.fuelEntryTotal(entry), 0);
+    },
+
+    formatCurrency(value) {
+        return `¥${Math.round(Number(value) || 0).toLocaleString('ja-JP')}`;
     },
 
     toDateInputValue(value) {
@@ -379,9 +469,11 @@ const app = {
             let inner = '';
 
             if (this.currentTab === 'tours') {
+                const totalDistance = this.hasValue(item.distance) ? item.distance : this.dailyDistanceTotal(item.dailyDistances);
+                const totalFuel = this.hasValue(item.fuelTotal) ? Number(item.fuelTotal) : this.fuelTotal(item.fuelEntries);
                 const chips = [
-                    this.hasValue(item.distance) ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">走行: ${this.escapeHtml(item.distance)}km</span>` : '',
-                    this.hasValue(item.mileage) ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">燃費: ${this.escapeHtml(item.mileage)}</span>` : ''
+                    totalDistance ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">走行: ${this.escapeHtml(totalDistance)}km</span>` : '',
+                    totalFuel ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">給油: ${this.escapeHtml(this.formatCurrency(totalFuel))}</span>` : ''
                 ].filter(Boolean).join('');
 
                 inner = `
@@ -443,11 +535,21 @@ const app = {
 
         const photoUrl = this.safeUrl(item.photoUrl);
         const photoUrls = this.parsePhotoUrls(item.photoUrls);
+        const dailyDistances = this.parseDailyDistances(item.dailyDistances);
+        const totalDistance = this.hasValue(item.distance) ? Number(item.distance) : this.dailyDistanceTotal(item.dailyDistances);
+        const fuelEntries = this.parseFuelEntries(item.fuelEntries);
+        const totalFuel = this.hasValue(item.fuelTotal) ? Number(item.fuelTotal) : this.fuelTotal(item.fuelEntries);
+        const dailyDistanceHtml = dailyDistances.map(entry => (
+            `<div class="flex justify-between border-b border-gray-100 py-1"><span>${this.escapeHtml(this.formatShortDate(entry.date) || entry.date || '-')}</span><span>${this.escapeHtml(entry.distance || 0)}km</span></div>`
+        )).join('');
+        const fuelEntriesHtml = fuelEntries.map((entry, index) => (
+            `<div class="grid grid-cols-4 gap-2 border-b border-gray-100 py-1"><span>${index + 1}回目</span><span>${this.escapeHtml(entry.unitPrice || 0)}円/L</span><span>${this.escapeHtml(entry.liters || 0)}L</span><span class="text-right">${this.escapeHtml(this.formatCurrency(this.fuelEntryTotal(entry)))}</span></div>`
+        )).join('');
         const details = [
             `<div><span class="text-gray-400">日付</span><div class="font-medium">${this.escapeHtml(this.formatDateRange(item))}</div></div>`,
             `<div><span class="text-gray-400">目的地</span><div class="font-medium">${this.escapeHtml(item.destination || '-')}</div></div>`,
-            this.hasValue(item.distance) ? `<div><span class="text-gray-400">走行距離</span><div class="font-medium">${this.escapeHtml(item.distance)}km</div></div>` : '',
-            this.hasValue(item.mileage) ? `<div><span class="text-gray-400">燃費</span><div class="font-medium">${this.escapeHtml(item.mileage)}</div></div>` : ''
+            totalDistance ? `<div><span class="text-gray-400">走行距離</span><div class="font-medium">${this.escapeHtml(totalDistance)}km</div></div>` : '',
+            totalFuel ? `<div><span class="text-gray-400">給油合計</span><div class="font-medium">${this.escapeHtml(this.formatCurrency(totalFuel))}</div></div>` : ''
         ].filter(Boolean).join('');
         let modal = document.getElementById('record-modal');
 
@@ -469,7 +571,8 @@ const app = {
                     <div class="grid grid-cols-2 gap-3 text-sm">
                         ${details}
                     </div>
-                    ${this.hasValue(item.dailyDistances) ? `<div><div class="text-sm text-gray-400 mb-1">日別走行距離</div><p class="text-sm text-gray-700 whitespace-pre-wrap">${this.escapeHtml(item.dailyDistances)}</p></div>` : ''}
+                    ${dailyDistanceHtml ? `<div><div class="text-sm text-gray-400 mb-1">日別走行距離</div><div class="text-sm text-gray-700">${dailyDistanceHtml}</div></div>` : ''}
+                    ${fuelEntriesHtml ? `<div><div class="text-sm text-gray-400 mb-1">給油</div><div class="text-sm text-gray-700">${fuelEntriesHtml}</div></div>` : ''}
                     ${item.memo ? `<div><div class="text-sm text-gray-400 mb-1">メモ</div><p class="text-sm text-gray-700 whitespace-pre-wrap">${this.escapeHtml(item.memo)}</p></div>` : ''}
                     ${photoUrls.length ? `<div><div class="text-sm text-gray-400 mb-2">追加写真</div><div class="grid grid-cols-2 gap-3">${photoUrls.map(url => `<a href="${this.escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="block h-32 rounded bg-cover bg-center border border-gray-200" style="background-image: url('${this.escapeHtml(url)}')"></a>`).join('')}</div></div>` : ''}
                 </div>
@@ -515,22 +618,36 @@ const app = {
         document.getElementById('form-fields').innerHTML = this.getFormFields();
         this.updatePhotoPreview('');
         this.updateExtraPhotoPreview('');
+        if (this.currentTab === 'tours') {
+            this.updateDailyDistanceFields();
+            this.renderFuelEntries();
+        }
     },
 
     getFormFields() {
         if (this.currentTab === 'tours') {
             return `
                 <div class="grid grid-cols-2 gap-4">
-                    <div><label class="block text-sm text-gray-600 mb-1">開始日</label><input type="date" name="date" class="w-full border p-2 rounded"></div>
-                    <div><label class="block text-sm text-gray-600 mb-1">終了日</label><input type="date" name="endDate" class="w-full border p-2 rounded"></div>
+                    <div><label class="block text-sm text-gray-600 mb-1">開始日</label><input type="date" name="date" onchange="app.updateDailyDistanceFields()" class="w-full border p-2 rounded"></div>
+                    <div><label class="block text-sm text-gray-600 mb-1">終了日</label><input type="date" name="endDate" onchange="app.updateDailyDistanceFields()" class="w-full border p-2 rounded"></div>
                 </div>
                 <div><label class="block text-sm text-gray-600 mb-1">目的地</label><input type="text" name="destination" class="w-full border p-2 rounded" required></div>
                 <div><label class="block text-sm text-gray-600 mb-1">メモ</label><textarea name="memo" class="w-full border p-2 rounded"></textarea></div>
-                <div class="grid grid-cols-2 gap-4">
-                    <div><label class="block text-sm text-gray-600 mb-1">走行距離(km)</label><input type="number" name="distance" class="w-full border p-2 rounded"></div>
-                    <div><label class="block text-sm text-gray-600 mb-1">燃費</label><input type="number" step="0.1" name="mileage" class="w-full border p-2 rounded"></div>
+                <input type="hidden" name="distance">
+                <input type="hidden" name="dailyDistances">
+                <input type="hidden" name="fuelEntries">
+                <input type="hidden" name="fuelTotal">
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">日別走行距離</label>
+                    <div id="daily-distance-fields" class="space-y-2"></div>
+                    <div id="daily-distance-total" class="text-sm text-gray-500 mt-2"></div>
                 </div>
-                <div><label class="block text-sm text-gray-600 mb-1">日別走行距離</label><textarea name="dailyDistances" class="w-full border p-2 rounded" rows="3" placeholder="1日目 120km&#10;2日目 95km"></textarea></div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">給油</label>
+                    <div id="fuel-entry-fields" class="space-y-2"></div>
+                    <button type="button" onclick="app.addFuelEntry()" class="mt-2 text-sm text-emerald-600 hover:underline">給油を追加</button>
+                    <div id="fuel-entry-total" class="text-sm text-gray-500 mt-2"></div>
+                </div>
                 <div>
                     <label class="block text-sm text-gray-600 mb-1">写真</label>
                     <input type="file" name="photoFile" accept="image/*" capture="environment" onchange="app.handlePhotoChange(this)" class="w-full border p-2 rounded bg-white">
@@ -597,6 +714,144 @@ const app = {
         `;
     },
 
+    updateDailyDistanceFields(existingValue = null) {
+        const form = document.getElementById('data-form');
+        const container = document.getElementById('daily-distance-fields');
+        if (!form || !container) return;
+
+        const storedValue = existingValue ?? form.elements.dailyDistances?.value ?? '';
+        const storedEntries = this.parseDailyDistances(storedValue);
+        const storedByDate = new Map(storedEntries.map(entry => [entry.date, entry.distance]));
+        let dates = this.dateRange(form.elements.date?.value, form.elements.endDate?.value);
+
+        if (!dates.length) {
+            dates = storedEntries.map(entry => entry.date).filter(Boolean);
+        }
+
+        if (!dates.length) {
+            container.innerHTML = '<div class="text-sm text-gray-400">日付を選ぶと入力欄が表示されます。</div>';
+            this.syncDailyDistances();
+            return;
+        }
+
+        container.innerHTML = dates.map(date => `
+            <div class="flex items-center gap-2">
+                <span class="w-16 shrink-0 text-sm text-gray-600">${this.escapeHtml(this.formatShortDate(date) || date)}</span>
+                <input type="number" min="0" step="0.1" inputmode="decimal" data-daily-distance-date="${this.escapeHtml(date)}" value="${this.escapeHtml(storedByDate.get(date) || '')}" oninput="app.syncDailyDistances()" class="min-w-0 flex-1 border p-2 rounded" placeholder="走行距離">
+                <span class="shrink-0 text-sm text-gray-400">km</span>
+            </div>
+        `).join('');
+
+        this.syncDailyDistances();
+    },
+
+    syncDailyDistances() {
+        const form = document.getElementById('data-form');
+        const totalEl = document.getElementById('daily-distance-total');
+        if (!form) return;
+
+        const inputs = Array.from(document.querySelectorAll('[data-daily-distance-date]'));
+        const entries = inputs.map(input => ({
+            date: input.dataset.dailyDistanceDate || '',
+            distance: String(input.value || '').trim()
+        })).filter(entry => entry.distance);
+        const total = entries.reduce((sum, entry) => sum + (Number(entry.distance) || 0), 0);
+        const roundedTotal = Math.round(total * 10) / 10;
+
+        if (form.elements.dailyDistances) {
+            form.elements.dailyDistances.value = entries.length ? JSON.stringify(entries) : '';
+        }
+        if (form.elements.distance) {
+            form.elements.distance.value = roundedTotal ? String(roundedTotal) : '';
+        }
+        if (totalEl) {
+            totalEl.textContent = roundedTotal ? `合計 ${roundedTotal}km` : '';
+        }
+    },
+
+    readFuelEntriesFromForm() {
+        return Array.from(document.querySelectorAll('[data-fuel-row]')).map(row => ({
+            unitPrice: String(row.querySelector('[data-fuel-unit-price]')?.value || '').trim(),
+            liters: String(row.querySelector('[data-fuel-liters]')?.value || '').trim()
+        }));
+    },
+
+    renderFuelEntries(value = null) {
+        const form = document.getElementById('data-form');
+        const container = document.getElementById('fuel-entry-fields');
+        if (!form || !container) return;
+
+        const storedValue = value ?? form.elements.fuelEntries?.value ?? '';
+        const entries = Array.isArray(storedValue) ? storedValue : this.parseFuelEntries(storedValue);
+        const rows = entries.length ? entries : [{ unitPrice: '', liters: '' }];
+
+        container.innerHTML = rows.map((entry, index) => `
+            <div data-fuel-row class="rounded border border-gray-100 p-3">
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">${index + 1}回目 単価</label>
+                        <input type="number" min="0" step="1" inputmode="numeric" data-fuel-unit-price value="${this.escapeHtml(entry.unitPrice || '')}" oninput="app.syncFuelEntries()" class="w-full border p-2 rounded" placeholder="円/L">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">給油量</label>
+                        <input type="number" min="0" step="0.01" inputmode="decimal" data-fuel-liters value="${this.escapeHtml(entry.liters || '')}" oninput="app.syncFuelEntries()" class="w-full border p-2 rounded" placeholder="L">
+                    </div>
+                </div>
+                <div class="mt-2 flex items-center justify-between gap-2">
+                    <span class="text-sm text-gray-500" data-fuel-row-total></span>
+                    <button type="button" onclick="app.removeFuelEntry(${index})" class="rounded border border-red-100 px-3 py-1.5 text-sm text-red-600">削除</button>
+                </div>
+            </div>
+        `).join('');
+
+        this.syncFuelEntries();
+    },
+
+    addFuelEntry() {
+        const entries = this.readFuelEntriesFromForm();
+        entries.push({ unitPrice: '', liters: '' });
+        this.renderFuelEntries(entries);
+    },
+
+    removeFuelEntry(index) {
+        const entries = this.readFuelEntriesFromForm();
+        entries.splice(index, 1);
+        this.renderFuelEntries(entries);
+    },
+
+    syncFuelEntries() {
+        const form = document.getElementById('data-form');
+        const totalEl = document.getElementById('fuel-entry-total');
+        if (!form) return;
+
+        const rows = Array.from(document.querySelectorAll('[data-fuel-row]'));
+        const entries = rows.map(row => ({
+            unitPrice: String(row.querySelector('[data-fuel-unit-price]')?.value || '').trim(),
+            liters: String(row.querySelector('[data-fuel-liters]')?.value || '').trim()
+        }));
+        let total = 0;
+
+        rows.forEach((row, index) => {
+            const rowTotal = this.fuelEntryTotal(entries[index]);
+            total += rowTotal;
+            const rowTotalEl = row.querySelector('[data-fuel-row-total]');
+            if (rowTotalEl) {
+                rowTotalEl.textContent = rowTotal ? `${this.formatCurrency(rowTotal)}` : '';
+            }
+        });
+
+        const filledEntries = entries.filter(entry => entry.unitPrice || entry.liters);
+        if (form.elements.fuelEntries) {
+            form.elements.fuelEntries.value = filledEntries.length ? JSON.stringify(filledEntries) : '';
+        }
+        if (form.elements.fuelTotal) {
+            form.elements.fuelTotal.value = total ? String(total) : '';
+        }
+        if (totalEl) {
+            totalEl.textContent = total ? `合計 ${this.formatCurrency(total)}` : '';
+        }
+    },
+
     editItem(index) {
         this.editIndex = index;
         this.showModal(true);
@@ -614,6 +869,10 @@ const app = {
 
             this.updatePhotoPreview(item.photoUrl || '');
             this.updateExtraPhotoPreview(item.photoUrls || '');
+            if (this.currentTab === 'tours') {
+                this.updateDailyDistanceFields(item.dailyDistances || '');
+                this.renderFuelEntries(item.fuelEntries || '');
+            }
         }, 20);
     },
 
@@ -812,10 +1071,16 @@ const app = {
             submitBtn.disabled = true;
             submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
 
+            if (this.currentTab === 'tours') {
+                this.syncDailyDistances();
+                this.syncFuelEntries();
+            }
+
             const formData = new FormData(form);
             const data = Object.fromEntries(formData.entries());
             delete data.photoFile;
             delete data.extraPhotoFiles;
+            delete data.mileage;
             const oldItem = this.editIndex !== null ? this.data[this.editIndex] : null;
             data.id = oldItem?.id || data.id || this.createRecordId();
             const context = this.uploadContext(data);
