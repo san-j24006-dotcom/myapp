@@ -2,12 +2,13 @@ const app = {
     currentTab: 'tours',
     data: [],
     editIndex: null,
-    deletedRows: new Set(),
+    deletedRows: new Map(),
     deletedIds: new Set(),
     deletedRecordKeys: new Set(),
     removedPhotoUrls: new Set(),
     pendingCoverPhotoFile: null,
     pendingExtraPhotoFiles: [],
+    legacyRowDeleteCutoff: Date.parse('2026-09-10T03:00:00Z'),
 
     labels: {
         tours: 'ツーリング記録',
@@ -304,7 +305,7 @@ const app = {
     },
 
     async fetchDeletedRows() {
-        this.deletedRows = new Set();
+        this.deletedRows = new Map();
         this.deletedIds = new Set();
         this.deletedRecordKeys = new Set();
 
@@ -317,8 +318,11 @@ const app = {
                 .map(item => this.normalizeRecord(item))
                 .filter(item => item.sheet === this.currentTab);
             const deletedRows = deletedItems
-                .map(item => Number(item.rowIndex))
-                .filter(Number.isInteger);
+                .map(item => ({
+                    rowIndex: Number(item.rowIndex),
+                    deletedAt: Date.parse(item.deletedAt || '')
+                }))
+                .filter(item => Number.isInteger(item.rowIndex));
             const deletedIds = deletedItems
                 .map(item => String(item.id || '').trim())
                 .filter(Boolean);
@@ -326,11 +330,14 @@ const app = {
                 .map(item => String(item.legacyKey || '').trim())
                 .filter(Boolean);
 
-            this.deletedRows = new Set(deletedRows);
+            this.deletedRows = new Map(deletedRows.map(item => [
+                item.rowIndex,
+                Number.isFinite(item.deletedAt) ? item.deletedAt : 0
+            ]));
             this.deletedIds = new Set(deletedIds);
             this.deletedRecordKeys = new Set(deletedRecordKeys);
         } catch {
-            this.deletedRows = new Set();
+            this.deletedRows = new Map();
             this.deletedIds = new Set();
             this.deletedRecordKeys = new Set();
         }
@@ -346,7 +353,8 @@ const app = {
             return true;
         }
 
-        return false;
+        const rowDeletedAt = this.deletedRows.get(item.__rowIndex);
+        return Number.isFinite(rowDeletedAt) && rowDeletedAt >= this.legacyRowDeleteCutoff;
     },
 
     renderCards() {
