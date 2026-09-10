@@ -1,4 +1,4 @@
-const PHOTO_FOLDER_ID = '19pnCmseZGW9Oo5QaiFtsNjliOWdzGFp0';
+var PHOTO_FOLDER_ID = '19pnCmseZGW9Oo5QaiFtsNjliOWdzGFp0';
 
 function authorize() {
   SpreadsheetApp.getActiveSpreadsheet().getName();
@@ -232,9 +232,15 @@ function parsePhotoUrlList(value) {
   } catch (error) {
   }
 
-  return text.split(/\n|,/).map(function (url) {
-    return url.trim();
-  }).filter(Boolean);
+  var urls = [];
+  text.replace(/\r/g, '\n').split('\n').forEach(function (line) {
+    line.split(',').forEach(function (url) {
+      var trimmed = url.trim();
+      if (trimmed) urls.push(trimmed);
+    });
+  });
+
+  return urls;
 }
 
 function buildRecordName(rowData) {
@@ -243,7 +249,7 @@ function buildRecordName(rowData) {
     date = Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   }
 
-  var name = rowData.destination || rowData.name || rowData.task || rowData.memo || '未分類';
+  var name = rowData.destination || rowData.name || rowData.task || rowData.memo || unicodeText('unclassified');
   return String((date ? date + ' ' : '') + name).trim();
 }
 
@@ -252,20 +258,18 @@ function uploadPhoto(data) {
     throw new Error('PHOTO_FOLDER_ID is empty');
   }
 
-  var dataUrl = data.dataUrl || '';
-  var match = dataUrl.match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,(.+)$/i);
-
-  if (!match) {
+  var parsedImage = parseImageDataUrl(data.dataUrl || '');
+  if (!parsedImage) {
     throw new Error('Invalid image data');
   }
 
-  var mimeType = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
-  var bytes = Utilities.base64Decode(match[2]);
-  var extension = mimeType.split('/')[1].replace('jpeg', 'jpg');
+  var mimeType = parsedImage.mimeType;
+  var bytes = Utilities.base64Decode(parsedImage.base64);
+  var extension = imageExtension(mimeType);
   var fileName = sanitizeFileName(data.fileName || ('motolog-' + Date.now() + '.' + extension));
   var rolePrefix = data.role === 'cover' ? 'cover' : (data.role === 'additional' ? 'additional' : 'photo');
 
-  if (!/\.(jpg|jpeg|png|webp)$/i.test(fileName)) {
+  if (!hasImageExtension(fileName)) {
     fileName += '.' + extension;
   }
 
@@ -283,10 +287,46 @@ function uploadPhoto(data) {
   });
 }
 
+function parseImageDataUrl(dataUrl) {
+  var value = String(dataUrl || '');
+  var marker = ';base64,';
+  var markerIndex = value.indexOf(marker);
+
+  if (value.indexOf('data:image/') !== 0 || markerIndex === -1) {
+    return null;
+  }
+
+  var mimeType = value.substring(5, markerIndex).toLowerCase();
+  if (mimeType === 'image/jpg') {
+    mimeType = 'image/jpeg';
+  }
+
+  if (['image/jpeg', 'image/png', 'image/webp'].indexOf(mimeType) === -1) {
+    return null;
+  }
+
+  return {
+    mimeType: mimeType,
+    base64: value.substring(markerIndex + marker.length)
+  };
+}
+
+function imageExtension(mimeType) {
+  if (mimeType === 'image/png') return 'png';
+  if (mimeType === 'image/webp') return 'webp';
+  return 'jpg';
+}
+
+function hasImageExtension(fileName) {
+  var lower = String(fileName || '').toLowerCase();
+  return lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') || lower.endsWith('.webp');
+}
+
 function getPhotoFolder(data) {
   var root = DriveApp.getFolderById(PHOTO_FOLDER_ID);
-  var category = sanitizeFolderName(data.category || folderLabelForSheet(data.sheet) || 'その他');
-  var recordName = sanitizeFolderName(data.recordName || ('未分類-' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss')));
+  var category = sanitizeFolderName(data.category || folderLabelForSheet(data.sheet) || unicodeText('other'));
+  var fallbackRecordName = unicodeText('unclassified') + '-' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss');
+  var recordName = sanitizeFolderName(data.recordName || fallbackRecordName);
   var categoryFolder = getOrCreateFolder(root, category);
 
   return getOrCreateFolder(categoryFolder, recordName);
@@ -294,13 +334,26 @@ function getPhotoFolder(data) {
 
 function folderLabelForSheet(sheetName) {
   var labels = {
-    tours: 'ツーリング記録',
-    spots: 'スポット',
-    parts: 'パーツ管理',
-    reminders: 'リマインダー'
+    tours: unicodeText('tours'),
+    spots: unicodeText('spots'),
+    parts: unicodeText('parts'),
+    reminders: unicodeText('reminders')
   };
 
   return labels[sheetName] || sheetName || '';
+}
+
+function unicodeText(key) {
+  var values = {
+    tours: '\u30c4\u30fc\u30ea\u30f3\u30b0\u8a18\u9332',
+    spots: '\u30b9\u30dd\u30c3\u30c8',
+    parts: '\u30d1\u30fc\u30c4\u7ba1\u7406',
+    reminders: '\u30ea\u30de\u30a4\u30f3\u30c0\u30fc',
+    other: '\u305d\u306e\u4ed6',
+    unclassified: '\u672a\u5206\u985e'
+  };
+
+  return values[key] || key;
 }
 
 function getOrCreateFolder(parent, name) {
@@ -320,7 +373,11 @@ function sanitizeFileName(fileName) {
     value = value.split(char).join('-');
   });
 
-  return value.split(/\s+/).join(' ').trim().slice(0, 120);
+  while (value.indexOf('  ') !== -1) {
+    value = value.split('  ').join(' ');
+  }
+
+  return value.trim().slice(0, 120);
 }
 
 function sanitizeFolderName(folderName) {
@@ -330,7 +387,7 @@ function sanitizeFolderName(folderName) {
     value = value.slice(0, -1).trim();
   }
 
-  return value || '未分類';
+  return value || unicodeText('unclassified');
 }
 
 function createJsonResponse(responseData) {
