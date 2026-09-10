@@ -4,6 +4,8 @@ const app = {
     editIndex: null,
     deletedRows: new Set(),
     removedPhotoUrls: new Set(),
+    pendingCoverPhotoFile: null,
+    pendingExtraPhotoFiles: [],
 
     labels: {
         tours: 'ツーリング記録',
@@ -89,6 +91,26 @@ const app = {
         return /drive\.google\.com\/(?:thumbnail|uc|file\/d\/|open)/i.test(url);
     },
 
+    categoryLabel(tab = this.currentTab) {
+        return {
+            tours: 'ツーリング記録',
+            spots: 'スポット',
+            parts: 'パーツ管理',
+            reminders: 'リマインダー'
+        }[tab] || tab || 'その他';
+    },
+
+    uploadContext(data = {}) {
+        const name = data.destination || data.name || data.task || data.memo || '未分類';
+        const date = data.date || data.dueDate || new Date().toISOString().slice(0, 10);
+
+        return {
+            sheet: this.currentTab,
+            category: this.categoryLabel(this.currentTab),
+            recordName: `${date} ${name}`.trim()
+        };
+    },
+
     async fileToImageDataUrl(file, options = {}) {
         if (!file || !file.type.startsWith('image/')) return '';
 
@@ -143,13 +165,14 @@ const app = {
         });
     },
 
-    async uploadPhotoFile(file) {
+    async uploadPhotoFile(file, context = {}) {
         const driveDataUrl = await this.fileToDriveDataUrl(file);
 
         try {
             const result = await this.sendPayload({
                 action: 'uploadPhoto',
                 data: {
+                    ...context,
                     fileName: file.name || `motolog-${Date.now()}.jpg`,
                     mimeType: 'image/jpeg',
                     dataUrl: driveDataUrl
@@ -394,6 +417,8 @@ const app = {
     showModal(isEdit = false) {
         this.editIndex = isEdit ? this.editIndex : null;
         this.removedPhotoUrls = new Set();
+        this.pendingCoverPhotoFile = null;
+        this.pendingExtraPhotoFiles = [];
         const titleEl = document.getElementById('modal-title');
         if (titleEl) titleEl.textContent = isEdit ? '編集' : '新規追加';
 
@@ -517,9 +542,10 @@ const app = {
         }
 
         try {
-            const photoValue = await this.uploadPhotoFile(file);
-            hiddenInput.value = photoValue;
-            this.updatePhotoPreview(photoValue);
+            const previewValue = await this.fileToImageDataUrl(file);
+            this.pendingCoverPhotoFile = file;
+            hiddenInput.value = previewValue;
+            this.updatePhotoPreview(previewValue);
         } catch (error) {
             input.value = '';
             alert(error.message);
@@ -528,6 +554,11 @@ const app = {
 
     clearPhoto() {
         const form = document.getElementById('data-form');
+        const oldPhotoUrl = this.safeUrl(form.elements.photoUrl?.value);
+        if (oldPhotoUrl && this.isDrivePhotoUrl(oldPhotoUrl)) {
+            this.removedPhotoUrls.add(oldPhotoUrl);
+        }
+        this.pendingCoverPhotoFile = null;
         if (form.elements.photoFile) form.elements.photoFile.value = '';
         if (form.elements.photoUrl) form.elements.photoUrl.value = '';
         this.updatePhotoPreview('');
@@ -546,7 +577,9 @@ const app = {
         try {
             const urls = this.parsePhotoUrls(hiddenInput.value);
             for (const file of files) {
-                urls.push(await this.uploadPhotoFile(file));
+                const previewUrl = await this.fileToImageDataUrl(file);
+                this.pendingExtraPhotoFiles.push({ file, previewUrl });
+                urls.push(previewUrl);
             }
             hiddenInput.value = JSON.stringify(urls);
             this.updateExtraPhotoPreview(hiddenInput.value);
@@ -560,6 +593,7 @@ const app = {
         const form = document.getElementById('data-form');
         const urls = this.parsePhotoUrls(form.elements.photoUrls?.value);
         urls.forEach(url => this.removedPhotoUrls.add(url));
+        this.pendingExtraPhotoFiles = [];
         if (form.elements.extraPhotoFiles) form.elements.extraPhotoFiles.value = '';
         if (form.elements.photoUrls) form.elements.photoUrls.value = '';
         this.updateExtraPhotoPreview('');
@@ -573,6 +607,8 @@ const app = {
 
         if (removedUrl) {
             this.removedPhotoUrls.add(removedUrl);
+            this.pendingExtraPhotoFiles = this.pendingExtraPhotoFiles
+                .filter(photo => photo.previewUrl !== removedUrl);
         }
 
         hiddenInput.value = JSON.stringify(urls);
@@ -692,19 +728,28 @@ const app = {
             const data = Object.fromEntries(formData.entries());
             delete data.photoFile;
             delete data.extraPhotoFiles;
+            const context = this.uploadContext(data);
 
-            const photoFile = form.elements.photoFile?.files?.[0];
-            if (photoFile && !data.photoUrl) {
-                data.photoUrl = await this.uploadPhotoFile(photoFile);
+            if (this.pendingCoverPhotoFile) {
+                data.photoUrl = await this.uploadPhotoFile(this.pendingCoverPhotoFile, {
+                    ...context,
+                    role: 'cover'
+                });
             }
 
-            const extraPhotoFiles = Array.from(form.elements.extraPhotoFiles?.files || []);
-            if (extraPhotoFiles.length && !data.photoUrls) {
-                const urls = [];
-                for (const file of extraPhotoFiles) {
-                    urls.push(await this.uploadPhotoFile(file));
+            if (this.pendingExtraPhotoFiles.length) {
+                const existingUrls = this.parsePhotoUrls(data.photoUrls)
+                    .filter(url => !url.startsWith('data:image/'));
+                const uploadedUrls = [];
+
+                for (const photo of this.pendingExtraPhotoFiles) {
+                    uploadedUrls.push(await this.uploadPhotoFile(photo.file, {
+                        ...context,
+                        role: 'additional'
+                    }));
                 }
-                data.photoUrls = JSON.stringify(urls);
+
+                data.photoUrls = JSON.stringify([...existingUrls, ...uploadedUrls]);
             }
 
             const payload = {

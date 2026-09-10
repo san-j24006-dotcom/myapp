@@ -56,4 +56,5 @@ After the deployment is updated:
 - The spreadsheet stores only image URLs.
 - Deleting a record moves its Google Drive photos to the trash.
 - Removing an individual additional photo and saving also moves that photo to the trash.
+- Photos are stored under category and record folders, such as `MotoLog Photos / ツーリング記録 / 2026-09-10 箱根`.
 - If the new GAS upload endpoint is not ready yet, the app falls back to the previous compressed-image save method.

@@ -166,13 +166,14 @@ function uploadPhoto(data) {
   var bytes = Utilities.base64Decode(match[2]);
   var extension = mimeType.split('/')[1].replace('jpeg', 'jpg');
   var fileName = sanitizeFileName(data.fileName || ('motolog-' + Date.now() + '.' + extension));
+  var rolePrefix = data.role === 'cover' ? 'cover' : (data.role === 'additional' ? 'additional' : 'photo');
 
   if (!/\.(jpg|jpeg|png|webp)$/i.test(fileName)) {
     fileName += '.' + extension;
   }
 
-  var folder = DriveApp.getFolderById(PHOTO_FOLDER_ID);
-  var blob = Utilities.newBlob(bytes, mimeType, fileName);
+  var folder = getPhotoFolder(data);
+  var blob = Utilities.newBlob(bytes, mimeType, rolePrefix + '-' + Date.now() + '-' + fileName);
   var file = folder.createFile(blob);
   file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
 
@@ -185,12 +186,46 @@ function uploadPhoto(data) {
   });
 }
 
+function getPhotoFolder(data) {
+  var root = DriveApp.getFolderById(PHOTO_FOLDER_ID);
+  var category = sanitizeFolderName(data.category || folderLabelForSheet(data.sheet) || 'その他');
+  var recordName = sanitizeFolderName(data.recordName || ('未分類-' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss')));
+  var categoryFolder = getOrCreateFolder(root, category);
+
+  return getOrCreateFolder(categoryFolder, recordName);
+}
+
+function folderLabelForSheet(sheetName) {
+  var labels = {
+    tours: 'ツーリング記録',
+    spots: 'スポット',
+    parts: 'パーツ管理',
+    reminders: 'リマインダー'
+  };
+
+  return labels[sheetName] || sheetName || '';
+}
+
+function getOrCreateFolder(parent, name) {
+  var folders = parent.getFoldersByName(name);
+  if (folders.hasNext()) {
+    return folders.next();
+  }
+
+  return parent.createFolder(name);
+}
+
 function sanitizeFileName(fileName) {
   return String(fileName)
     .replace(/[\\/:*?"<>|#%{}~&]/g, '-')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120);
+}
+
+function sanitizeFolderName(folderName) {
+  var value = sanitizeFileName(folderName).replace(/\.+$/g, '').trim();
+  return value || '未分類';
 }
 
 function createJsonResponse(responseData) {
