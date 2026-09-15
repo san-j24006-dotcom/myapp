@@ -300,6 +300,31 @@ const app = {
         ), 0);
     },
 
+    dailyDistancesForItem(item) {
+        const entries = this.parseDailyDistances(item.dailyDistances);
+        if (entries.length) return entries;
+
+        const distance = String(item.distance ?? '').trim();
+        if (!distance) return [];
+
+        const dates = this.dateRange(item.date, item.endDate);
+        if (dates.length <= 1) {
+            return [{ date: dates[0] || this.toDateInputValue(item.date) || this.toDateInputValue(item.endDate), distance }];
+        }
+
+        return [];
+    },
+
+    dailyDistanceEntriesTotal(entries) {
+        return (entries || []).reduce((total, entry) => total + (Number(entry.distance) || 0), 0);
+    },
+
+    formatDistance(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return String(value ?? '');
+        return (Math.round(number * 10) / 10).toLocaleString('ja-JP');
+    },
+
     parseFuelEntries(value) {
         if (!value) return [];
 
@@ -321,8 +346,26 @@ const app = {
         return Math.round((Number(entry.unitPrice) || 0) * (Number(entry.liters) || 0));
     },
 
+    fuelEntriesForItem(item) {
+        return this.parseFuelEntries(item.fuelEntries);
+    },
+
     fuelTotal(value) {
         return this.parseFuelEntries(value).reduce((total, entry) => total + this.fuelEntryTotal(entry), 0);
+    },
+
+    fuelEntriesTotal(entries) {
+        return (entries || []).reduce((total, entry) => total + this.fuelEntryTotal(entry), 0);
+    },
+
+    fuelLitersTotal(entries) {
+        return (entries || []).reduce((total, entry) => total + (Number(entry.liters) || 0), 0);
+    },
+
+    formatLiters(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return String(value ?? '');
+        return (Math.round(number * 100) / 100).toLocaleString('ja-JP');
     },
 
     formatCurrency(value) {
@@ -475,10 +518,19 @@ const app = {
             let inner = '';
 
             if (this.currentTab === 'tours') {
-                const totalDistance = this.hasValue(item.distance) ? item.distance : this.dailyDistanceTotal(item.dailyDistances);
-                const totalFuel = this.hasValue(item.fuelTotal) ? Number(item.fuelTotal) : this.fuelTotal(item.fuelEntries);
+                const dailyDistances = this.dailyDistancesForItem(item);
+                const fuelEntries = this.fuelEntriesForItem(item);
+                const totalDistance = this.hasValue(item.distance) ? Number(item.distance) : this.dailyDistanceEntriesTotal(dailyDistances);
+                const totalFuel = this.hasValue(item.fuelTotal) ? Number(item.fuelTotal) : this.fuelEntriesTotal(fuelEntries);
+                const totalLiters = this.fuelLitersTotal(fuelEntries);
+                const dailyPreview = dailyDistances.slice(0, 3).map(entry => (
+                    `<div class="flex justify-between gap-2"><span>${this.escapeHtml(this.formatShortDate(entry.date) || entry.date || '-')}</span><span>${this.escapeHtml(this.formatDistance(entry.distance))}km</span></div>`
+                )).join('');
+                const fuelPreview = fuelEntries.slice(0, 2).map((entry, fuelIndex) => (
+                    `<div class="flex justify-between gap-2"><span>${fuelIndex + 1}回目 ${this.escapeHtml(this.formatLiters(entry.liters))}L</span><span>${this.escapeHtml(this.formatCurrency(this.fuelEntryTotal(entry)))}</span></div>`
+                )).join('');
                 const chips = [
-                    totalDistance ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">走行合計: ${this.escapeHtml(totalDistance)}km</span>` : '',
+                    totalDistance ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">走行合計: ${this.escapeHtml(this.formatDistance(totalDistance))}km</span>` : '',
                     totalFuel ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">給油合計: ${this.escapeHtml(this.formatCurrency(totalFuel))}</span>` : ''
                 ].filter(Boolean).join('');
 
@@ -488,6 +540,8 @@ const app = {
                     <h3 class="text-lg font-bold text-gray-800 mb-2">${this.escapeHtml(item.destination || '目的地なし')}</h3>
                     <p class="text-gray-600 text-sm mb-3 line-clamp-2">${this.escapeHtml(item.memo)}</p>
                     ${chips ? `<div class="flex gap-2 text-xs">${chips}</div>` : ''}
+                    ${dailyPreview ? `<div class="mt-3 rounded bg-gray-50 p-2 text-xs text-gray-600"><div class="mb-1 font-medium text-gray-700">日別走行距離</div>${dailyPreview}${dailyDistances.length > 3 ? `<div class="pt-1 text-gray-400">ほか${dailyDistances.length - 3}日</div>` : ''}</div>` : ''}
+                    ${fuelPreview ? `<div class="mt-2 rounded bg-gray-50 p-2 text-xs text-gray-600"><div class="mb-1 flex justify-between gap-2 font-medium text-gray-700"><span>給油</span><span>${this.escapeHtml(this.formatLiters(totalLiters))}L</span></div>${fuelPreview}${fuelEntries.length > 2 ? `<div class="pt-1 text-gray-400">ほか${fuelEntries.length - 2}回</div>` : ''}</div>` : ''}
                 `;
             } else if (this.currentTab === 'spots') {
                 inner = `
@@ -541,31 +595,33 @@ const app = {
 
         const photoUrl = this.safeUrl(item.photoUrl);
         const photoUrls = this.parsePhotoUrls(item.photoUrls);
-        const dailyDistances = this.parseDailyDistances(item.dailyDistances);
-        const totalDistance = this.hasValue(item.distance) ? Number(item.distance) : this.dailyDistanceTotal(item.dailyDistances);
-        const fuelEntries = this.parseFuelEntries(item.fuelEntries);
-        const totalFuel = this.hasValue(item.fuelTotal) ? Number(item.fuelTotal) : this.fuelTotal(item.fuelEntries);
+        const dailyDistances = this.dailyDistancesForItem(item);
+        const totalDistance = this.hasValue(item.distance) ? Number(item.distance) : this.dailyDistanceEntriesTotal(dailyDistances);
+        const fuelEntries = this.fuelEntriesForItem(item);
+        const totalFuel = this.hasValue(item.fuelTotal) ? Number(item.fuelTotal) : this.fuelEntriesTotal(fuelEntries);
+        const totalLiters = this.fuelLitersTotal(fuelEntries);
         const dailyDistanceHtml = dailyDistances.map(entry => (
-            `<div class="flex justify-between border-b border-gray-100 py-1"><span>${this.escapeHtml(this.formatShortDate(entry.date) || entry.date || '-')}</span><span>${this.escapeHtml(entry.distance || 0)}km</span></div>`
+            `<div class="flex justify-between border-b border-gray-100 py-1"><span>${this.escapeHtml(this.formatShortDate(entry.date) || entry.date || '-')}</span><span>${this.escapeHtml(this.formatDistance(entry.distance))}km</span></div>`
         )).join('');
         const dailyDistanceSection = dailyDistances.length || totalDistance ? `
             <div>
                 <div class="text-sm text-gray-400 mb-1">日別走行距離</div>
                 <div class="text-sm text-gray-700">
                     ${dailyDistanceHtml}
-                    <div class="flex justify-between pt-2 font-semibold text-gray-800"><span>合計</span><span>${this.escapeHtml(totalDistance)}km</span></div>
+                    <div class="flex justify-between pt-2 font-semibold text-gray-800"><span>合計</span><span>${this.escapeHtml(this.formatDistance(totalDistance))}km</span></div>
                 </div>
             </div>
         ` : '';
         const fuelEntriesHtml = fuelEntries.map((entry, index) => (
-            `<div class="grid grid-cols-4 gap-2 border-b border-gray-100 py-1"><span>${index + 1}回目</span><span>${this.escapeHtml(entry.unitPrice || 0)}円/L</span><span>${this.escapeHtml(entry.liters || 0)}L</span><span class="text-right">${this.escapeHtml(this.formatCurrency(this.fuelEntryTotal(entry)))}</span></div>`
+            `<div class="grid grid-cols-4 gap-2 border-b border-gray-100 py-1"><span>${index + 1}回目</span><span>${this.escapeHtml(this.formatLiters(entry.liters))}L</span><span>${this.escapeHtml(entry.unitPrice || 0)}円/L</span><span class="text-right">${this.escapeHtml(this.formatCurrency(this.fuelEntryTotal(entry)))}</span></div>`
         )).join('');
         const fuelEntriesSection = fuelEntries.length || totalFuel ? `
             <div>
                 <div class="text-sm text-gray-400 mb-1">給油</div>
                 <div class="text-sm text-gray-700">
+                    ${fuelEntriesHtml ? '<div class="grid grid-cols-4 gap-2 border-b border-gray-100 py-1 text-xs text-gray-400"><span>回数</span><span>給油量</span><span>単価</span><span class="text-right">金額</span></div>' : ''}
                     ${fuelEntriesHtml}
-                    <div class="flex justify-between pt-2 font-semibold text-gray-800"><span>合計</span><span>${this.escapeHtml(this.formatCurrency(totalFuel))}</span></div>
+                    <div class="flex justify-between pt-2 font-semibold text-gray-800"><span>合計</span><span>${this.escapeHtml(this.formatLiters(totalLiters))}L / ${this.escapeHtml(this.formatCurrency(totalFuel))}</span></div>
                 </div>
             </div>
         ` : '';
