@@ -43,15 +43,19 @@
 
     <!-- メインコンテンツ -->
     <main class="flex-1 flex flex-col h-full relative overflow-y-auto pb-16 md:pb-0">
-        <header class="bg-white shadow-sm p-4 flex justify-between items-center sticky top-0 z-10">
+        <header class="bg-white shadow-sm p-4 flex flex-wrap gap-2 justify-between items-center sticky top-0 z-10">
             <h2 id="page-title" class="text-xl font-semibold">ツーリング記録</h2>
-            <button onclick="app.showModal()"
-                class="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg shadow transition-colors font-medium">
-                + 新規追加
-            </button>
+            <div class="flex items-center gap-2">
+                <button onclick="app.fetchData(true)" class="text-xs text-gray-500 hover:text-emerald-600 px-2 py-2">再読み込み</button>
+                <button onclick="app.showModal()"
+                    class="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg shadow transition-colors font-medium">
+                    + 新規追加
+                </button>
+            </div>
         </header>
 
         <div class="p-6">
+            <p id="load-status" role="status" class="text-xs text-gray-500 mb-2"></p>
             <!-- ローディング表示 -->
             <div id="loading" class="hidden text-center py-10">
                 <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-emerald-500 mx-auto"></div>

@@ -2,6 +2,22 @@ body {
     font-family: 'Inter', sans-serif;
 }
 
+#data-form input,
+#data-form .grid > div {
+    min-width: 0;
+}
+
+#fuel-entry-total,
+#daily-distance-total {
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+
+#content-area h3,
+#record-modal {
+    overflow-wrap: anywhere;
+}
+
 /* スクロールバーのカスタマイズ */
 ::-webkit-scrollbar {
     width: 8px;

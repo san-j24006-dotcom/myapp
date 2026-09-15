@@ -2,6 +2,10 @@ const app = {
     currentTab: 'tours',
     data: [],
     editIndex: null,
+    editRecord: null,
+    requestVersion: 0,
+    recordCache: new Map(),
+    cacheMaxAge: 30000,
     deletedRows: new Map(),
     deletedIds: new Set(),
     deletedRecordKeys: new Set(),
@@ -92,6 +96,14 @@ const app = {
 
     isDrivePhotoUrl(url) {
         return /drive\.google\.com\/(?:thumbnail|uc|file\/d\/|open)/i.test(url);
+    },
+
+    thumbnailUrl(value) {
+        const url = new URL(value, window.location.href);
+        if (url.hostname === 'drive.google.com' && url.pathname === '/thumbnail') {
+            url.searchParams.set('sz', 'w640');
+        }
+        return url.href;
     },
 
     createRecordId() {
@@ -274,7 +286,7 @@ const app = {
         if (!value) return [];
 
         try {
-            const items = JSON.parse(value);
+            const items = Array.isArray(value) ? value : JSON.parse(value);
             if (Array.isArray(items)) {
                 return items.map(item => ({
                     date: this.toDateInputValue(item.date),
@@ -305,7 +317,7 @@ const app = {
         if (entries.length) return entries;
 
         const distance = String(item.distance ?? '').trim();
-        if (!distance) return [];
+        if (!distance || !this.hasValue(item.endDate)) return [];
 
         const dates = this.dateRange(item.date, item.endDate);
         if (dates.length <= 1) {
@@ -329,9 +341,10 @@ const app = {
         if (!value) return [];
 
         try {
-            const items = JSON.parse(value);
+            const items = Array.isArray(value) ? value : JSON.parse(value);
             if (Array.isArray(items)) {
                 return items.map(item => ({
+                    date: this.toDateInputValue(item.date),
                     unitPrice: String(item.unitPrice ?? '').trim(),
                     liters: String(item.liters ?? '').trim()
                 })).filter(item => item.unitPrice || item.liters);
@@ -409,78 +422,130 @@ const app = {
         await this.fetchData();
     },
 
-    async fetchData() {
+    cacheKey(tab) {
+        return `motolog:records:v1:${CONFIG.GAS_URL}:${tab}`;
+    },
+
+    readCachedRecords(tab) {
+        try {
+            const cached = this.recordCache.get(tab) || JSON.parse(sessionStorage.getItem(this.cacheKey(tab)));
+            if (Array.isArray(cached?.data) && Number.isFinite(cached.savedAt)) return cached;
+        } catch {
+            // Storage may be disabled or full; network loading still works.
+        }
+        return null;
+    },
+
+    cacheRecords(tab, data) {
+        const cached = { data, savedAt: Date.now() };
+        this.recordCache.set(tab, cached);
+        try {
+            const serialized = JSON.stringify(cached);
+            if (serialized.length < 1000000) {
+                sessionStorage.setItem(this.cacheKey(tab), serialized);
+            } else {
+                sessionStorage.removeItem(this.cacheKey(tab));
+            }
+        } catch {
+        }
+    },
+
+    invalidateCache(tab) {
+        this.recordCache.delete(tab);
+        try {
+            sessionStorage.removeItem(this.cacheKey(tab));
+        } catch {
+        }
+    },
+
+    async fetchSheet(tab) {
+        const response = await fetch(`${CONFIG.GAS_URL}?sheet=${encodeURIComponent(tab)}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const json = await response.json();
+        if (json.error) {
+            if (tab === 'deleted' && json.error === 'Sheet not found: deleted') return [];
+            throw new Error(json.error);
+        }
+        if (!Array.isArray(json.data)) throw new Error('データの形式を確認できませんでした');
+        return json.data;
+    },
+
+    async fetchData(force = false) {
+        const tab = this.currentTab;
+        const version = ++this.requestVersion;
         const loading = document.getElementById('loading');
         const contentArea = document.getElementById('content-area');
+        const status = document.getElementById('load-status');
+        const cached = force ? null : this.readCachedRecords(tab);
 
-        loading.classList.remove('hidden');
-        contentArea.innerHTML = '';
+        status.textContent = '';
+        loading.classList.toggle('hidden', Boolean(cached));
+        if (cached) {
+            this.data = cached.data;
+            this.renderCards();
+            if (Date.now() - cached.savedAt < this.cacheMaxAge) return;
+            status.textContent = '更新中...';
+        } else {
+            this.data = [];
+            contentArea.innerHTML = '';
+        }
 
         try {
-            await this.fetchDeletedRows();
-
-            const response = await fetch(`${CONFIG.GAS_URL}?sheet=${this.currentTab}`);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-            const json = await response.json();
-            if (json.error) throw new Error(json.error);
-
-            const records = (json.data || [])
+            const [items, deletedItems] = await Promise.all([
+                this.fetchSheet(tab),
+                this.fetchSheet('deleted')
+            ]);
+            if (version !== this.requestVersion) return;
+            this.setDeletedRows(deletedItems, tab);
+            const records = items
                 .map((item, index) => ({
                     ...this.normalizeRecord(item),
-                    __rowIndex: index + 2
+                    __rowIndex: Number(item.__rowIndex) || index + 2
                 }))
                 .filter(item => !this.isEmptyRecord(item));
             this.data = records.filter(item => !this.isDeletedRecord(item));
+            this.cacheRecords(tab, this.data);
             this.renderCards();
+            status.textContent = '';
         } catch (error) {
+            if (version !== this.requestVersion) return;
+            if (cached) {
+                status.textContent = '更新できませんでした。前回のデータを表示しています。';
+                return;
+            }
             contentArea.innerHTML = `
                 <div class="col-span-full bg-red-50 text-red-600 p-4 rounded border-l-4 border-red-500">
                     エラーが発生しました: ${this.escapeHtml(error.message)}
                 </div>
             `;
         } finally {
-            loading.classList.add('hidden');
+            if (version === this.requestVersion) loading.classList.add('hidden');
         }
     },
 
-    async fetchDeletedRows() {
-        this.deletedRows = new Map();
-        this.deletedIds = new Set();
-        this.deletedRecordKeys = new Set();
+    setDeletedRows(items, tab) {
+        const deletedItems = items
+            .map(item => this.normalizeRecord(item))
+            .filter(item => item.sheet === tab);
+        const deletedRows = deletedItems
+            .map(item => ({
+                rowIndex: Number(item.rowIndex),
+                deletedAt: Date.parse(item.deletedAt || '')
+            }))
+            .filter(item => Number.isInteger(item.rowIndex));
+        const deletedIds = deletedItems
+            .map(item => String(item.id || '').trim())
+            .filter(Boolean);
+        const deletedRecordKeys = deletedItems
+            .map(item => String(item.legacyKey || '').trim())
+            .filter(Boolean);
 
-        try {
-            const response = await fetch(`${CONFIG.GAS_URL}?sheet=deleted`);
-            if (!response.ok) return;
-
-            const json = await response.json();
-            const deletedItems = (json.data || [])
-                .map(item => this.normalizeRecord(item))
-                .filter(item => item.sheet === this.currentTab);
-            const deletedRows = deletedItems
-                .map(item => ({
-                    rowIndex: Number(item.rowIndex),
-                    deletedAt: Date.parse(item.deletedAt || '')
-                }))
-                .filter(item => Number.isInteger(item.rowIndex));
-            const deletedIds = deletedItems
-                .map(item => String(item.id || '').trim())
-                .filter(Boolean);
-            const deletedRecordKeys = deletedItems
-                .map(item => String(item.legacyKey || '').trim())
-                .filter(Boolean);
-
-            this.deletedRows = new Map(deletedRows.map(item => [
-                item.rowIndex,
-                Number.isFinite(item.deletedAt) ? item.deletedAt : 0
-            ]));
-            this.deletedIds = new Set(deletedIds);
-            this.deletedRecordKeys = new Set(deletedRecordKeys);
-        } catch {
-            this.deletedRows = new Map();
-            this.deletedIds = new Set();
-            this.deletedRecordKeys = new Set();
-        }
+        this.deletedRows = new Map(deletedRows.map(item => [
+            item.rowIndex,
+            Number.isFinite(item.deletedAt) ? item.deletedAt : 0
+        ]));
+        this.deletedIds = new Set(deletedIds);
+        this.deletedRecordKeys = new Set(deletedRecordKeys);
     },
 
     isDeletedRecord(item) {
@@ -527,7 +592,7 @@ const app = {
                     `<div class="flex justify-between gap-2"><span>${this.escapeHtml(this.formatShortDate(entry.date) || entry.date || '-')}</span><span>${this.escapeHtml(this.formatDistance(entry.distance))}km</span></div>`
                 )).join('');
                 const fuelPreview = fuelEntries.slice(0, 2).map((entry, fuelIndex) => (
-                    `<div class="flex justify-between gap-2"><span>${fuelIndex + 1}回目 ${this.escapeHtml(this.formatLiters(entry.liters))}L</span><span>${this.escapeHtml(this.formatCurrency(this.fuelEntryTotal(entry)))}</span></div>`
+                    `<div class="flex justify-between gap-2"><span>${this.escapeHtml(this.formatShortDate(entry.date) || '日付未登録')}・${fuelIndex + 1}回目 ${this.escapeHtml(this.formatLiters(entry.liters))}L</span><span>${this.escapeHtml(this.formatCurrency(this.fuelEntryTotal(entry)))}</span></div>`
                 )).join('');
                 const chips = [
                     totalDistance ? `<span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">走行合計: ${this.escapeHtml(this.formatDistance(totalDistance))}km</span>` : '',
@@ -535,11 +600,11 @@ const app = {
                 ].filter(Boolean).join('');
 
                 inner = `
-                    ${photoUrl ? `<div class="h-32 -mx-5 -mt-5 mb-4 bg-cover bg-center" style="background-image: url('${this.escapeHtml(photoUrl)}')"></div>` : ''}
+                    ${photoUrl ? `<div class="h-32 -mx-5 -mt-5 mb-4"><img src="${this.escapeHtml(this.thumbnailUrl(photoUrl))}" alt="" loading="lazy" decoding="async" class="h-full w-full object-cover"></div>` : ''}
                     <div class="text-xs text-gray-400 mb-1">${this.escapeHtml(this.formatDateRange(item))}</div>
                     <h3 class="text-lg font-bold text-gray-800 mb-2">${this.escapeHtml(item.destination || '目的地なし')}</h3>
                     <p class="text-gray-600 text-sm mb-3 line-clamp-2">${this.escapeHtml(item.memo)}</p>
-                    ${chips ? `<div class="flex gap-2 text-xs">${chips}</div>` : ''}
+                    ${chips ? `<div class="flex flex-wrap gap-2 text-xs">${chips}</div>` : ''}
                     ${dailyPreview ? `<div class="mt-3 rounded bg-gray-50 p-2 text-xs text-gray-600"><div class="mb-1 font-medium text-gray-700">日別走行距離</div>${dailyPreview}${dailyDistances.length > 3 ? `<div class="pt-1 text-gray-400">ほか${dailyDistances.length - 3}日</div>` : ''}</div>` : ''}
                     ${fuelPreview ? `<div class="mt-2 rounded bg-gray-50 p-2 text-xs text-gray-600"><div class="mb-1 flex justify-between gap-2 font-medium text-gray-700"><span>給油</span><span>${this.escapeHtml(this.formatLiters(totalLiters))}L</span></div>${fuelPreview}${fuelEntries.length > 2 ? `<div class="pt-1 text-gray-400">ほか${fuelEntries.length - 2}回</div>` : ''}</div>` : ''}
                 `;
@@ -613,15 +678,14 @@ const app = {
             </div>
         ` : '';
         const fuelEntriesHtml = fuelEntries.map((entry, index) => (
-            `<div class="grid grid-cols-4 gap-2 border-b border-gray-100 py-1"><span>${index + 1}回目</span><span>${this.escapeHtml(this.formatLiters(entry.liters))}L</span><span>${this.escapeHtml(entry.unitPrice || 0)}円/L</span><span class="text-right">${this.escapeHtml(this.formatCurrency(this.fuelEntryTotal(entry)))}</span></div>`
+            `<div class="border-b border-gray-100 py-2"><div class="flex flex-wrap justify-between gap-2"><span>${this.escapeHtml(entry.date ? this.formatDate(entry.date) : '日付未登録')}・${index + 1}回目</span><span class="font-medium">${this.escapeHtml(this.formatCurrency(this.fuelEntryTotal(entry)))}</span></div><div class="mt-1 text-gray-500">${this.escapeHtml(this.formatLiters(entry.liters))}L × ${this.escapeHtml(entry.unitPrice || 0)}円/L</div></div>`
         )).join('');
         const fuelEntriesSection = fuelEntries.length || totalFuel ? `
             <div>
                 <div class="text-sm text-gray-400 mb-1">給油</div>
                 <div class="text-sm text-gray-700">
-                    ${fuelEntriesHtml ? '<div class="grid grid-cols-4 gap-2 border-b border-gray-100 py-1 text-xs text-gray-400"><span>回数</span><span>給油量</span><span>単価</span><span class="text-right">金額</span></div>' : ''}
                     ${fuelEntriesHtml}
-                    <div class="flex justify-between pt-2 font-semibold text-gray-800"><span>合計</span><span>${this.escapeHtml(this.formatLiters(totalLiters))}L / ${this.escapeHtml(this.formatCurrency(totalFuel))}</span></div>
+                    <div class="flex flex-wrap justify-between gap-2 pt-2 font-semibold text-gray-800"><span>合計${fuelEntries.length ? `（${fuelEntries.length}回）` : ''}</span><span>${this.escapeHtml(this.formatLiters(totalLiters))}L / ${this.escapeHtml(this.formatCurrency(totalFuel))}</span></div>
                 </div>
             </div>
         ` : '';
@@ -679,6 +743,7 @@ const app = {
 
     showModal(isEdit = false) {
         this.editIndex = isEdit ? this.editIndex : null;
+        this.editRecord = isEdit ? this.editRecord : null;
         this.removedPhotoUrls = new Set();
         this.pendingCoverPhotoFile = null;
         this.pendingExtraPhotoFiles = [];
@@ -693,6 +758,7 @@ const app = {
             content.classList.add('modal-scale-in');
         }, 10);
 
+        document.getElementById('data-form').reset();
         document.getElementById('form-fields').innerHTML = this.getFormFields();
         this.updatePhotoPreview('');
         this.updateExtraPhotoPreview('');
@@ -706,8 +772,8 @@ const app = {
         if (this.currentTab === 'tours') {
             return `
                 <div class="grid grid-cols-2 gap-4">
-                    <div><label class="block text-sm text-gray-600 mb-1">開始日</label><input type="date" name="date" onchange="app.updateDailyDistanceFields()" class="w-full border p-2 rounded"></div>
-                    <div><label class="block text-sm text-gray-600 mb-1">終了日</label><input type="date" name="endDate" onchange="app.updateDailyDistanceFields()" class="w-full border p-2 rounded"></div>
+                    <div class="min-w-0"><label class="block text-sm text-gray-600 mb-1">開始日</label><input type="date" name="date" onchange="app.updateTourDates()" class="w-full min-w-0 border p-2 rounded"></div>
+                    <div class="min-w-0"><label class="block text-sm text-gray-600 mb-1">終了日</label><input type="date" name="endDate" onchange="app.updateTourDates()" class="w-full min-w-0 border p-2 rounded"></div>
                 </div>
                 <div><label class="block text-sm text-gray-600 mb-1">目的地</label><input type="text" name="destination" class="w-full border p-2 rounded" required></div>
                 <div><label class="block text-sm text-gray-600 mb-1">メモ</label><textarea name="memo" class="w-full border p-2 rounded"></textarea></div>
@@ -843,16 +909,29 @@ const app = {
         if (form.elements.dailyDistances) {
             form.elements.dailyDistances.value = entries.length ? JSON.stringify(entries) : '';
         }
+        const legacyTotal = this.editRecord && !this.hasValue(this.editRecord.dailyDistances) ? this.editRecord.distance : '';
+        const displayTotal = entries.length ? roundedTotal : legacyTotal;
         if (form.elements.distance) {
-            form.elements.distance.value = roundedTotal ? String(roundedTotal) : '';
+            form.elements.distance.value = this.hasValue(displayTotal) ? String(displayTotal) : '';
         }
         if (totalEl) {
-            totalEl.textContent = roundedTotal ? `合計 ${roundedTotal}km` : '';
+            totalEl.textContent = this.hasValue(displayTotal) ? `合計 ${this.formatDistance(displayTotal)}km` : '';
         }
+    },
+
+    updateTourDates() {
+        this.updateDailyDistanceFields();
+        const form = document.getElementById('data-form');
+        const defaultDate = form.elements.date.value || form.elements.endDate.value;
+        document.querySelectorAll('[data-fuel-date]').forEach(input => {
+            if (!input.value) input.value = defaultDate;
+        });
+        this.syncFuelEntries();
     },
 
     readFuelEntriesFromForm() {
         return Array.from(document.querySelectorAll('[data-fuel-row]')).map(row => ({
+            date: String(row.querySelector('[data-fuel-date]')?.value || '').trim(),
             unitPrice: String(row.querySelector('[data-fuel-unit-price]')?.value || '').trim(),
             liters: String(row.querySelector('[data-fuel-liters]')?.value || '').trim()
         }));
@@ -865,13 +944,16 @@ const app = {
 
         const storedValue = value ?? form.elements.fuelEntries?.value ?? '';
         const entries = Array.isArray(storedValue) ? storedValue : this.parseFuelEntries(storedValue);
-        const rows = entries.length ? entries : [{ unitPrice: '', liters: '' }];
+        const defaultDate = form.elements.date?.value || form.elements.endDate?.value || '';
+        const rows = entries.length ? entries : [{ date: defaultDate, unitPrice: '', liters: '' }];
 
         container.innerHTML = rows.map((entry, index) => `
             <div data-fuel-row class="rounded border border-white bg-white p-3">
+                <label class="block text-xs text-gray-500 mb-1">${index + 1}回目 給油日</label>
+                <input type="date" data-fuel-date value="${this.escapeHtml(entry.date || '')}" oninput="app.syncFuelEntries()" class="w-full min-w-0 border p-2 rounded mb-2">
                 <div class="grid grid-cols-2 gap-2">
                     <div>
-                        <label class="block text-xs text-gray-500 mb-1">${index + 1}回目 単価</label>
+                        <label class="block text-xs text-gray-500 mb-1">単価</label>
                         <input type="number" min="0" step="1" inputmode="numeric" data-fuel-unit-price value="${this.escapeHtml(entry.unitPrice || '')}" oninput="app.syncFuelEntries()" class="w-full border p-2 rounded" placeholder="円/L">
                     </div>
                     <div>
@@ -891,7 +973,8 @@ const app = {
 
     addFuelEntry() {
         const entries = this.readFuelEntriesFromForm();
-        entries.push({ unitPrice: '', liters: '' });
+        const form = document.getElementById('data-form');
+        entries.push({ date: entries.at(-1)?.date || form.elements.date.value || form.elements.endDate.value || '', unitPrice: '', liters: '' });
         this.renderFuelEntries(entries);
     },
 
@@ -907,10 +990,7 @@ const app = {
         if (!form) return;
 
         const rows = Array.from(document.querySelectorAll('[data-fuel-row]'));
-        const entries = rows.map(row => ({
-            unitPrice: String(row.querySelector('[data-fuel-unit-price]')?.value || '').trim(),
-            liters: String(row.querySelector('[data-fuel-liters]')?.value || '').trim()
-        }));
+        const entries = this.readFuelEntriesFromForm();
         let total = 0;
 
         rows.forEach((row, index) => {
@@ -930,16 +1010,17 @@ const app = {
             form.elements.fuelTotal.value = total ? String(total) : '';
         }
         if (totalEl) {
-            totalEl.textContent = total ? `合計 ${this.formatCurrency(total)}` : '';
+            totalEl.textContent = filledEntries.length ? `合計 ${this.formatLiters(this.fuelLitersTotal(filledEntries))}L / ${this.formatCurrency(total)}` : '';
         }
     },
 
     editItem(index) {
         this.editIndex = index;
+        this.editRecord = { ...this.data[index] };
         this.showModal(true);
 
         setTimeout(() => {
-            const item = this.data[index];
+            const item = this.editRecord;
             const form = document.getElementById('data-form');
 
             Object.keys(item).forEach(key => {
@@ -1116,6 +1197,7 @@ const app = {
 
     async deleteItem(index) {
         const item = this.data[index];
+        const tab = this.currentTab;
         const label = item.destination || item.name || item.task || this.labels[this.currentTab];
 
         if (!confirm(`「${label}」を削除しますか？`)) return;
@@ -1123,19 +1205,20 @@ const app = {
         try {
             const rowIndex = item.__rowIndex || index + 2;
             await this.sendPayload({
-                action: 'delete',
+                // Older delete handlers discard IDs; the generic writer keeps them.
+                action: 'add',
                 sheet: 'deleted',
                 data: {
-                    sheet: this.currentTab,
+                    sheet: tab,
                     rowIndex,
                     id: item.id || '',
                     legacyKey: this.recordKey(item),
-                    deletedAt: new Date().toISOString(),
-                    deletePhotos: true,
-                    photoUrls: this.allPhotoUrls(item)
+                    deletedAt: new Date().toISOString()
                 }
             });
-            await this.fetchData();
+            this.invalidateCache(tab);
+            await this.deleteDrivePhotos(this.allPhotoUrls(item));
+            if (this.currentTab === tab) await this.fetchData(true);
         } catch (error) {
             alert('削除に失敗しました: ' + error.message);
         }
@@ -1147,6 +1230,7 @@ const app = {
         const form = e.target;
         const submitBtn = form.querySelector('button[type="submit"]');
         const originalBtnText = submitBtn.textContent;
+        const tab = this.currentTab;
 
         try {
             submitBtn.textContent = '保存中...';
@@ -1166,9 +1250,11 @@ const app = {
             if (this.currentTab === 'tours') {
                 if (!data.date && data.endDate) data.date = data.endDate;
                 if (!data.endDate && data.date) data.endDate = data.date;
+                if (data.date > data.endDate) [data.date, data.endDate] = [data.endDate, data.date];
             }
-            const oldItem = this.editIndex !== null ? this.data[this.editIndex] : null;
-            data.id = oldItem?.id || data.id || this.createRecordId();
+            const oldItem = this.editRecord;
+            // The deployed API appends revisions; each revision needs its own ID.
+            data.id = this.createRecordId();
             const context = this.uploadContext(data);
 
             if (this.pendingCoverPhotoFile) {
@@ -1194,30 +1280,28 @@ const app = {
             }
 
             const payload = {
-                sheet: this.currentTab,
+                action: 'add',
+                sheet: tab,
                 data
             };
-            if (this.editIndex !== null) {
-                const rowIndex = this.data[this.editIndex]?.__rowIndex || this.editIndex + 2;
+            await this.sendPayload(payload);
+            this.invalidateCache(tab);
+
+            if (oldItem) {
+                const rowIndex = oldItem.__rowIndex || this.editIndex + 2;
 
                 await this.sendPayload({
                     action: 'add',
                     sheet: 'deleted',
                     data: {
-                        sheet: this.currentTab,
+                        sheet: tab,
                         rowIndex,
                         id: oldItem?.id || '',
                         legacyKey: this.recordKey(oldItem),
                         deletedAt: new Date().toISOString()
                     }
                 });
-
-                payload.action = 'add';
-            } else {
-                payload.action = 'add';
             }
-
-            await this.sendPayload(payload);
 
             if (oldItem) {
                 await this.deleteDrivePhotos(this.changedDrivePhotos(oldItem, data));
@@ -1226,7 +1310,8 @@ const app = {
             this.closeModal();
             form.reset();
             this.editIndex = null;
-            await this.fetchData();
+            this.editRecord = null;
+            if (this.currentTab === tab) await this.fetchData(true);
         } catch (error) {
             alert('保存に失敗しました: ' + error.message);
         } finally {

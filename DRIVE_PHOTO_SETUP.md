@@ -8,7 +8,13 @@ The current `tours` sheet columns are:
 id, date, endDate, destination, memo, distance, dailyDistances, fuelEntries, fuelTotal, photoUrl, photoUrls
 ```
 
-The latest Apps Script can add missing columns automatically when saving. `date` is the start date, `endDate` is the end date, `dailyDistances` stores per-day distances, `fuelEntries` stores fuel price/liter entries, `fuelTotal` stores the calculated fuel cost, `photoUrl` is used for the cover photo, and `photoUrls` is used for additional photos.
+The latest Apps Script can add missing columns automatically when saving. `date` is the start date, `endDate` is the end date, `dailyDistances` stores per-day distances, `fuelEntries` stores fuel date/price/liter entries, `fuelTotal` stores the calculated fuel cost, `photoUrl` is used for the cover photo, and `photoUrls` is used for additional photos.
+
+Older deployed scripts only save columns already present in row 1. Append missing headers to the right of existing columns; do not reorder headers without moving their data. The `deleted` sheet also needs `id` and `legacyKey` after its original three columns. GitHub updates do not update Apps Script deployments. Previously discarded dates and breakdowns must be entered again.
+
+Each `fuelEntries` item has the shape `{"date":"2026-09-15","unitPrice":"170","liters":"10.5"}`. Entries without a date remain readable and show an unregistered date.
+
+The frontend reuses per-tab data for 30 seconds in the same browser session and refreshes older data in the background. The reload button always fetches current data. Saving or deleting invalidates that tab's cache. With the append-only API, edits save a new revision ID before marking the old revision deleted.
 
 ## 2. Apps Script
 
