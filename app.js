@@ -450,8 +450,7 @@ const app = {
             return true;
         }
 
-        const rowDeletedAt = this.deletedRows.get(item.__rowIndex);
-        return Number.isFinite(rowDeletedAt) && rowDeletedAt >= this.legacyRowDeleteCutoff;
+        return false;
     },
 
     renderCards() {
