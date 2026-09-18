@@ -1,4 +1,5 @@
 var PHOTO_FOLDER_ID = '19pnCmseZGW9Oo5QaiFtsNjliOWdzGFp0';
+var API_VERSION = 2;
 var DEFAULT_HEADERS = {
   tours: ['id', 'date', 'endDate', 'destination', 'memo', 'distance', 'dailyDistances', 'fuelEntries', 'fuelTotal', 'photoUrl', 'photoUrls'],
   spots: ['id', 'name', 'status', 'type', 'mapUrl'],
@@ -57,6 +58,9 @@ function organizeExistingPhotos() {
 }
 
 function doGet(e) {
+  if (e && e.parameter && e.parameter.action === 'status') {
+    return createJsonResponse({ success: true, apiVersion: API_VERSION });
+  }
   var sheetName = (e && e.parameter && e.parameter.sheet) || 'tours';
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = spreadsheet.getSheetByName(sheetName);
@@ -65,11 +69,11 @@ function doGet(e) {
     return createJsonResponse({ error: 'Sheet not found: ' + sheetName });
   }
 
-  var data = sheet.getDataRange().getValues();
-  if (data.length <= 1) {
-    return createJsonResponse({ data: [] });
-  }
+  return createJsonResponse({ data: readRecords(sheet), apiVersion: API_VERSION });
+}
 
+function readRecords(sheet) {
+  var data = sheet.getDataRange().getValues();
   var headers = data[0].map(function (header) {
     return String(header || '').trim();
   });
@@ -93,82 +97,183 @@ function doGet(e) {
     }
 
     obj.__rowIndex = i + 1;
-    result.push(obj);
+    if (Object.keys(obj).some(function (key) {
+      return key !== '__rowIndex' && key !== 'id' && String(obj[key] || '').trim();
+    })) result.push(obj);
   }
-
-  return createJsonResponse({ data: result });
+  return result;
 }
 
 function doPost(e) {
+  var lock;
   try {
     var postData = JSON.parse(e.postData.contents || '{}');
+    lock = LockService.getScriptLock();
+    lock.waitLock(30000);
 
     if (postData.action === 'uploadPhoto') {
       return uploadPhoto(postData.data || {});
     }
 
-    if (postData.action === 'delete') {
-      return markDeleted(postData);
+    if (postData.action === 'saveRecord') {
+      return saveRecord(postData);
+    }
+
+    if (postData.action === 'deleteRecord') {
+      return deleteRecord(postData);
     }
 
     if (postData.action === 'deletePhotos') {
       return deletePhotos((postData.data || {}).photoUrls || []);
     }
 
-    return addRow(postData);
+    throw new Error('Please reload the app before saving or deleting.');
   } catch (error) {
-    return createJsonResponse({ error: error.message });
+    return createJsonResponse({ success: false, error: error.message });
+  } finally {
+    if (lock && lock.hasLock()) lock.releaseLock();
   }
 }
 
-function addRow(postData) {
-  var sheetName = postData.sheet;
-  var rowData = postData.data || {};
-  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+function recordSheet(spreadsheet, sheetName) {
+  if (!DEFAULT_HEADERS[sheetName] || sheetName === 'deleted') throw new Error('Invalid record sheet');
   var sheet = spreadsheet.getSheetByName(sheetName);
-
-  if (!sheet) {
-    return createJsonResponse({ error: 'Sheet not found: ' + sheetName });
-  }
-
-  var headers = ensureHeaders(sheet, rowData, sheetName);
-  var newRow = headers.map(function (header) {
-    return rowData[header] !== undefined ? rowData[header] : '';
-  });
-
-  sheet.appendRow(newRow);
-  return createJsonResponse({ success: true, message: 'Data added successfully' });
+  if (!sheet) throw new Error('Sheet not found: ' + sheetName);
+  return sheet;
 }
 
-function markDeleted(postData) {
-  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = spreadsheet.getSheetByName('deleted');
-
-  if (!sheet) {
-    sheet = spreadsheet.insertSheet('deleted');
-    sheet.appendRow(['sheet', 'rowIndex', 'deletedAt', 'id', 'legacyKey']);
-  }
-
-  var data = postData.data || {};
-  var deletedData = {
-    sheet: data.sheet || postData.sheet || '',
-    rowIndex: data.rowIndex || '',
-    deletedAt: new Date().toISOString(),
-    id: data.id || '',
-    legacyKey: data.legacyKey || ''
-  };
-  var headers = ensureHeaders(sheet, deletedData, 'deleted');
-  var row = headers.map(function (header) {
-    return deletedData[header] !== undefined ? deletedData[header] : '';
+function matchingRecord(records, original) {
+  if (!original || (!original.id && !Object.keys(original).some(function (key) {
+    return key !== '__rowIndex' && String(original[key] || '').trim();
+  }))) throw new Error('Record identity is required');
+  var matches = records.filter(function (record) {
+    if (original.id) return String(record.id) === String(original.id);
+    return !record.id && sameRecord(record, original);
   });
+  if (matches.length > 1) throw new Error('Record is ambiguous. Reload the app.');
+  return matches[0] || null;
+}
 
-  sheet.appendRow(row);
+function sameRecord(record, original) {
+  return Object.keys(original).filter(function (key) { return key !== '__rowIndex'; }).every(function (key) {
+    return String(record[key] === undefined ? '' : record[key]) === String(original[key] === undefined ? '' : original[key]);
+  });
+}
 
-  if (data.deletePhotos !== false && data.photoUrls) {
-    deletePhotos(data.photoUrls);
+function saveRecord(postData) {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = recordSheet(spreadsheet, postData.sheet);
+  var rowData = postData.data || {};
+  var records = readRecords(sheet);
+  var original = postData.original ? matchingRecord(records, postData.original) : null;
+  if (postData.original && (!original || !sameRecord(original, postData.original))) {
+    throw new Error('This record has changed or was deleted. Reload before editing.');
   }
+  if (!postData.original && records.some(function (record) { return rowData.id && record.id === rowData.id; })) {
+    throw new Error('Record already saved. Reload the app.');
+  }
+  var merged = Object.assign({}, original || {}, rowData);
+  delete merged.__rowIndex;
+  merged.id = (original && original.id) || rowData.id || Utilities.getUuid();
+  if (getRowPhotoUrls(merged).some(function (url) { return /^data:/i.test(String(url)); })) {
+    throw new Error('Upload photos to Google Drive before saving.');
+  }
+  var headers = ensureHeaders(sheet, merged, postData.sheet);
+  var newRow = headers.map(function (header) { return merged[header] !== undefined ? merged[header] : ''; });
+  var keptIds = getRowPhotoUrls(merged).map(extractDriveFileId);
+  var removedUrls = original ? getRowPhotoUrls(original).filter(function (url) {
+    return keptIds.indexOf(extractDriveFileId(url)) === -1;
+  }) : [];
+  var cleanup = withPhotoCleanup(removedUrls, spreadsheet, postData.sheet, original, function () {
+    if (original) sheet.getRange(original.__rowIndex, 1, 1, headers.length).setValues([newRow]);
+    else sheet.appendRow(newRow);
+    SpreadsheetApp.flush();
+  });
+  return createJsonResponse({ success: true, id: merged.id, updated: Boolean(original), photos: cleanup });
+}
 
-  return createJsonResponse({ success: true, message: 'Deleted marker added' });
+function deleteRecord(postData) {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = recordSheet(spreadsheet, postData.sheet);
+  var original = matchingRecord(readRecords(sheet), postData.original);
+  if (!original) return createJsonResponse({ success: true, deleted: true, alreadyDeleted: true });
+  var cleanup = withPhotoCleanup(getRowPhotoUrls(original), spreadsheet, postData.sheet, original, function () {
+    sheet.deleteRow(original.__rowIndex);
+    SpreadsheetApp.flush();
+  });
+  removeDeletionMarkers(spreadsheet, postData.sheet, original);
+  return createJsonResponse({ success: true, deleted: true, photos: cleanup });
+}
+
+function removeDeletionMarkers(spreadsheet, sheetName, original) {
+  var sheet = spreadsheet.getSheetByName('deleted');
+  if (!sheet) return;
+  var legacyKey = ['date', 'endDate', 'destination', 'memo', 'distance', 'dailyDistances', 'mileage', 'fuelEntries', 'fuelTotal', 'photoUrl', 'photoUrls']
+    .map(function (key) { return String(original[key] === undefined ? '' : original[key]).trim(); }).join('|');
+  readRecords(sheet).reverse().forEach(function (marker) {
+    if (marker.sheet !== sheetName) return;
+    if ((original.id && marker.id === original.id) || (!marker.id && marker.legacyKey === legacyKey)) {
+      sheet.deleteRow(marker.__rowIndex);
+    }
+  });
+}
+
+function referencedPhotoIds(spreadsheet, excludedSheet, excludedRecord) {
+  var ids = {};
+  Object.keys(DEFAULT_HEADERS).filter(function (name) { return name !== 'deleted'; }).forEach(function (name) {
+    var sheet = spreadsheet.getSheetByName(name);
+    if (!sheet) return;
+    readRecords(sheet).forEach(function (record) {
+      if (name === excludedSheet && excludedRecord && record.__rowIndex === excludedRecord.__rowIndex) return;
+      getRowPhotoUrls(record).forEach(function (url) {
+        var id = extractDriveFileId(url);
+        if (id) ids[id] = true;
+      });
+    });
+  });
+  return ids;
+}
+
+function isInPhotoFolder(file) {
+  var pending = [file];
+  var visited = {};
+  while (pending.length) {
+    var item = pending.pop();
+    if (item.getId() === PHOTO_FOLDER_ID) return true;
+    if (visited[item.getId()]) continue;
+    visited[item.getId()] = true;
+    var parents = item.getParents();
+    while (parents.hasNext()) pending.push(parents.next());
+  }
+  return false;
+}
+
+function withPhotoCleanup(urls, spreadsheet, excludedSheet, excludedRecord, writeRecord) {
+  var referenced = referencedPhotoIds(spreadsheet, excludedSheet, excludedRecord);
+  var ids = Array.from(new Set(urls.map(extractDriveFileId).filter(Boolean)));
+  var retainedIds = ids.filter(function (id) { return referenced[id]; });
+  var files = ids.filter(function (id) { return !referenced[id]; }).map(function (id) {
+    var file = DriveApp.getFileById(id);
+    if (!file.isTrashed() && !isInPhotoFolder(file)) throw new Error('Photo is outside the MotoLog folder: ' + id);
+    return file;
+  });
+  var trashed = [];
+  try {
+    files.forEach(function (file) {
+      if (!file.isTrashed()) {
+        file.setTrashed(true);
+        trashed.push(file);
+      }
+    });
+    writeRecord();
+  } catch (error) {
+    // Keep the existing record usable when either service rejects the operation.
+    trashed.forEach(function (file) {
+      try { file.setTrashed(false); } catch (restoreError) { Logger.log(restoreError.message); }
+    });
+    throw error;
+  }
+  return { deletedIds: files.map(function (file) { return file.getId(); }), retainedSharedIds: retainedIds };
 }
 
 function ensureHeaders(sheet, rowData, sheetName) {
@@ -201,44 +306,15 @@ function ensureHeaders(sheet, rowData, sheetName) {
 
 function deletePhotos(photoUrls) {
   var urls = Array.isArray(photoUrls) ? photoUrls : [photoUrls];
-  var deletedIds = [];
-  var errors = [];
-
-  urls.forEach(function (url) {
-    var fileId = extractDriveFileId(url);
-    if (!fileId) return;
-
-    try {
-      DriveApp.getFileById(fileId).setTrashed(true);
-      deletedIds.push(fileId);
-    } catch (error) {
-      errors.push({ id: fileId, message: error.message });
-    }
-  });
-
-  return createJsonResponse({
-    success: errors.length === 0,
-    deletedIds: deletedIds,
-    errors: errors
-  });
+  var result = withPhotoCleanup(urls, SpreadsheetApp.getActiveSpreadsheet(), '', null, function () {});
+  return createJsonResponse(Object.assign({ success: true }, result));
 }
 
 function extractDriveFileId(url) {
   var value = String(url || '');
-
-  if (value.indexOf('id=') !== -1) {
-    return value.split('id=')[1].split('&')[0];
-  }
-
-  if (value.indexOf('/file/d/') !== -1) {
-    return value.split('/file/d/')[1].split('/')[0];
-  }
-
-  if (value.indexOf('/d/') !== -1) {
-    return value.split('/d/')[1].split('/')[0];
-  }
-
-  return '';
+  if (!/^https:\/\/drive\.google\.com\//i.test(value)) return '';
+  var match = value.match(/[?&]id=([a-zA-Z0-9_-]+)/) || value.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : '';
 }
 
 function rowToObject(headers, row) {
@@ -268,6 +344,7 @@ function parsePhotoUrlList(value) {
   }
 
   var text = String(value);
+  if (/^data:/i.test(text)) return [text];
 
   try {
     var parsed = JSON.parse(text);
@@ -330,7 +407,12 @@ function uploadPhoto(data) {
   var folder = getPhotoFolder(data);
   var blob = Utilities.newBlob(bytes, mimeType, rolePrefix + '-' + Date.now() + '-' + fileName);
   var file = folder.createFile(blob);
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (error) {
+    file.setTrashed(true);
+    throw error;
+  }
 
   var fileId = file.getId();
   return createJsonResponse({

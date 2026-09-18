@@ -6,6 +6,8 @@ const app = {
     requestVersion: 0,
     recordCache: new Map(),
     cacheMaxAge: 30000,
+    backendVersion: 0,
+    mutationInProgress: false,
     deletedRows: new Map(),
     deletedIds: new Set(),
     deletedRecordKeys: new Set(),
@@ -95,7 +97,13 @@ const app = {
     },
 
     isDrivePhotoUrl(url) {
-        return /drive\.google\.com\/(?:thumbnail|uc|file\/d\/|open)/i.test(url);
+        try {
+            const parsed = new URL(url);
+            return parsed.protocol === 'https:' && parsed.hostname === 'drive.google.com'
+                && Boolean(parsed.searchParams.get('id') || parsed.pathname.match(/^\/file\/d\/[^/]+/));
+        } catch {
+            return false;
+        }
     },
 
     thumbnailUrl(value) {
@@ -206,24 +214,16 @@ const app = {
 
     async uploadPhotoFile(file, context = {}) {
         const driveDataUrl = await this.fileToDriveDataUrl(file);
+        return this.uploadPhotoDataUrl(driveDataUrl, { ...context, fileName: file.name });
+    },
 
-        try {
-            const result = await this.sendPayload({
-                action: 'uploadPhoto',
-                data: {
-                    ...context,
-                    fileName: file.name || `motolog-${Date.now()}.jpg`,
-                    mimeType: 'image/jpeg',
-                    dataUrl: driveDataUrl
-                }
-            });
-
-            if (result.url) return result.url;
-        } catch {
-            // GASがDriveアップロード未対応の場合は、従来通り軽量化した画像を保存する。
-        }
-
-        return this.fileToImageDataUrl(file);
+    async uploadPhotoDataUrl(dataUrl, context = {}) {
+        const result = await this.sendPayload({
+            action: 'uploadPhoto',
+            data: { ...context, fileName: context.fileName || `motolog-${Date.now()}.jpg`, dataUrl }
+        });
+        if (!this.isDrivePhotoUrl(result.url)) throw new Error('Google Driveへの画像保存を確認できませんでした。');
+        return result.url;
     },
 
     formatDate(value) {
@@ -399,6 +399,10 @@ const app = {
     },
 
     init() {
+        for (const tab of Object.keys(this.labels)) {
+            try { sessionStorage.removeItem(`motolog:records:v1:${CONFIG.GAS_URL}:${tab}`); } catch {
+            }
+        }
         if (CONFIG.GAS_URL === 'YOUR_GAS_URL_HERE') {
             document.getElementById('content-area').innerHTML = `
                 <div class="col-span-full bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded shadow-sm">
@@ -423,7 +427,7 @@ const app = {
     },
 
     cacheKey(tab) {
-        return `motolog:records:v1:${CONFIG.GAS_URL}:${tab}`;
+        return `motolog:records:v2:${CONFIG.GAS_URL}:${tab}`;
     },
 
     readCachedRecords(tab) {
@@ -437,6 +441,10 @@ const app = {
     },
 
     cacheRecords(tab, data) {
+        if (data.some(item => this.allPhotoUrls(item).some(url => url.startsWith('data:')))) {
+            this.invalidateCache(tab);
+            return;
+        }
         const cached = { data, savedAt: Date.now() };
         this.recordCache.set(tab, cached);
         try {
@@ -642,7 +650,7 @@ const app = {
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                         編集
                     </button>
-                    <button onclick="event.stopPropagation(); app.deleteItem(${index})" class="text-gray-500 hover:text-red-600 transition-colors flex items-center gap-1 text-sm bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">
+                    <button onclick="event.stopPropagation(); app.deleteItem(${index}, this)" class="text-gray-500 hover:text-red-600 transition-colors flex items-center gap-1 text-sm bg-white px-2 py-1 rounded-md shadow-sm border border-gray-100">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3m-9 0h12"></path></svg>
                         削除
                     </button>
@@ -1163,79 +1171,70 @@ const app = {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const result = await response.json();
-        if (result.error) throw new Error(result.error);
+        if (result.success !== true) {
+            const message = result.error || (result.errors || []).map(error => error.message).join('; ');
+            throw new Error(message || 'Google側で処理の完了を確認できませんでした。');
+        }
         return result;
+    },
+
+    async ensureBackend() {
+        if (this.backendVersion >= 2) return;
+        const response = await fetch(`${CONFIG.GAS_URL}?action=status`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const result = await response.json();
+        if (!(result.apiVersion >= 2)) throw new Error('GASの更新が必要です。最新版をデプロイしてから再度お試しください。');
+        this.backendVersion = result.apiVersion;
     },
 
     async deleteDrivePhotos(urls) {
         const driveUrls = [...new Set((urls || []).filter(url => this.isDrivePhotoUrl(url)))];
         if (!driveUrls.length) return;
 
-        try {
-            await this.sendPayload({
-                action: 'deletePhotos',
-                data: {
-                    photoUrls: driveUrls
-                }
-            });
-        } catch (error) {
-            console.warn('Drive photo deletion failed:', error);
-        }
+        return this.sendPayload({ action: 'deletePhotos', data: { photoUrls: driveUrls } });
     },
 
-    changedDrivePhotos(oldItem, newData) {
-        const oldCover = this.safeUrl(oldItem?.photoUrl);
-        const newCover = this.safeUrl(newData?.photoUrl);
-        const removed = [...this.removedPhotoUrls];
-
-        if (oldCover && oldCover !== newCover) {
-            removed.push(oldCover);
-        }
-
-        return removed.filter(url => this.isDrivePhotoUrl(url));
-    },
-
-    async deleteItem(index) {
+    async deleteItem(index, button) {
+        if (this.mutationInProgress) return;
         const item = this.data[index];
+        if (!item) return;
         const tab = this.currentTab;
         const label = item.destination || item.name || item.task || this.labels[this.currentTab];
 
-        if (!confirm(`「${label}」を削除しますか？`)) return;
+        if (!confirm(`「${label}」を削除しますか？\nスプレッドシートの記録と、ほかの記録で使っていないDriveの写真も削除します。`)) return;
 
+        this.mutationInProgress = true;
+        if (button) button.disabled = true;
         try {
-            const rowIndex = item.__rowIndex || index + 2;
-            await this.sendPayload({
-                // Older delete handlers discard IDs; the generic writer keeps them.
-                action: 'add',
-                sheet: 'deleted',
-                data: {
-                    sheet: tab,
-                    rowIndex,
-                    id: item.id || '',
-                    legacyKey: this.recordKey(item),
-                    deletedAt: new Date().toISOString()
-                }
-            });
+            await this.ensureBackend();
+            const result = await this.sendPayload({ action: 'deleteRecord', sheet: tab, original: item });
+            if (!result.deleted) throw new Error('スプレッドシートの削除を確認できませんでした。');
             this.invalidateCache(tab);
-            await this.deleteDrivePhotos(this.allPhotoUrls(item));
             if (this.currentTab === tab) await this.fetchData(true);
         } catch (error) {
             alert('削除に失敗しました: ' + error.message);
+        } finally {
+            this.mutationInProgress = false;
+            if (button) button.disabled = false;
         }
     },
 
     async submitForm(e) {
         e.preventDefault();
+        if (this.mutationInProgress) return;
+        this.mutationInProgress = true;
 
         const form = e.target;
         const submitBtn = form.querySelector('button[type="submit"]');
         const originalBtnText = submitBtn.textContent;
         const tab = this.currentTab;
+        const uploadedUrls = [];
 
         try {
             submitBtn.textContent = '保存中...';
             submitBtn.disabled = true;
             submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            await this.ensureBackend();
 
             if (this.currentTab === 'tours') {
                 this.syncDailyDistances();
@@ -1253,8 +1252,8 @@ const app = {
                 if (data.date > data.endDate) [data.date, data.endDate] = [data.endDate, data.date];
             }
             const oldItem = this.editRecord;
-            // The deployed API appends revisions; each revision needs its own ID.
-            data.id = this.createRecordId();
+            data.id = oldItem?.id || data.id || this.createRecordId();
+            form.elements.id.value = data.id;
             const context = this.uploadContext(data);
 
             if (this.pendingCoverPhotoFile) {
@@ -1262,50 +1261,33 @@ const app = {
                     ...context,
                     role: 'cover'
                 });
+                uploadedUrls.push(data.photoUrl);
+            } else if (data.photoUrl?.startsWith('data:image/')) {
+                data.photoUrl = await this.uploadPhotoDataUrl(data.photoUrl, { ...context, role: 'cover' });
+                uploadedUrls.push(data.photoUrl);
             }
 
-            if (this.pendingExtraPhotoFiles.length) {
-                const existingUrls = this.parsePhotoUrls(data.photoUrls)
-                    .filter(url => !url.startsWith('data:image/'));
-                const uploadedUrls = [];
-
-                for (const photo of this.pendingExtraPhotoFiles) {
-                    uploadedUrls.push(await this.uploadPhotoFile(photo.file, {
-                        ...context,
-                        role: 'additional'
-                    }));
+            if (tab === 'tours') {
+                const extraUrls = [];
+                for (const url of this.parsePhotoUrls(data.photoUrls)) {
+                    const pending = this.pendingExtraPhotoFiles.find(photo => photo.previewUrl === url);
+                    let savedUrl = url;
+                    if (pending) savedUrl = await this.uploadPhotoFile(pending.file, { ...context, role: 'additional' });
+                    else if (url.startsWith('data:image/')) savedUrl = await this.uploadPhotoDataUrl(url, { ...context, role: 'additional' });
+                    if (savedUrl !== url) uploadedUrls.push(savedUrl);
+                    extraUrls.push(savedUrl);
                 }
-
-                data.photoUrls = JSON.stringify([...existingUrls, ...uploadedUrls]);
+                data.photoUrls = extraUrls.length ? JSON.stringify(extraUrls) : '';
             }
 
             const payload = {
-                action: 'add',
+                action: 'saveRecord',
                 sheet: tab,
-                data
+                data,
+                original: oldItem
             };
             await this.sendPayload(payload);
             this.invalidateCache(tab);
-
-            if (oldItem) {
-                const rowIndex = oldItem.__rowIndex || this.editIndex + 2;
-
-                await this.sendPayload({
-                    action: 'add',
-                    sheet: 'deleted',
-                    data: {
-                        sheet: tab,
-                        rowIndex,
-                        id: oldItem?.id || '',
-                        legacyKey: this.recordKey(oldItem),
-                        deletedAt: new Date().toISOString()
-                    }
-                });
-            }
-
-            if (oldItem) {
-                await this.deleteDrivePhotos(this.changedDrivePhotos(oldItem, data));
-            }
 
             this.closeModal();
             form.reset();
@@ -1313,8 +1295,15 @@ const app = {
             this.editRecord = null;
             if (this.currentTab === tab) await this.fetchData(true);
         } catch (error) {
-            alert('保存に失敗しました: ' + error.message);
+            let message = '保存に失敗しました: ' + error.message;
+            try {
+                await this.deleteDrivePhotos(uploadedUrls);
+            } catch (cleanupError) {
+                message += '\n未保存の写真をDriveから削除できませんでした: ' + cleanupError.message;
+            }
+            alert(message);
         } finally {
+            this.mutationInProgress = false;
             submitBtn.textContent = originalBtnText;
             submitBtn.disabled = false;
             submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');

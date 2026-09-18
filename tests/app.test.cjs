@@ -126,3 +126,45 @@ test('only the previous revision is hidden and thumbnails keep the original URL'
     assert.match(app.thumbnailUrl(original), /sz=w640/);
     assert.match(original, /sz=w1600/);
 });
+
+test('upload failure never falls back to embedded image storage', async () => {
+    const { app } = setup();
+    app.fileToDriveDataUrl = async () => 'data:image/jpeg;base64,AAAA';
+    app.sendPayload = async () => { throw new Error('Drive unavailable'); };
+    app.fileToImageDataUrl = () => assert.fail('No inline fallback');
+    await assert.rejects(app.uploadPhotoFile({ name: 'photo.jpg' }), /Drive unavailable/);
+    app.sendPayload = async () => ({ success: true, url: 'https://example.com/photo.jpg' });
+    await assert.rejects(app.uploadPhotoFile({ name: 'photo.jpg' }));
+});
+
+test('failed API responses and old backend versions are not treated as success', async () => {
+    const { app, context } = setup();
+    context.fetch = async () => ({ ok: true, json: async () => ({ success: false, errors: [{ message: 'Permission denied' }] }) });
+    await assert.rejects(app.sendPayload({}), /Permission denied/);
+    context.fetch = async () => ({ ok: true, json: async () => ({ data: [] }) });
+    await assert.rejects(app.ensureBackend());
+    assert.equal(app.backendVersion, 0);
+});
+
+test('browser cache stores URLs but never embedded images', () => {
+    const { app, storage } = setup();
+    app.cacheRecords('tours', [{ photoUrl: 'data:image/png;base64,AAAA' }]);
+    assert.equal(storage.size, 0);
+    assert.equal(app.readCachedRecords('tours'), null);
+    app.cacheRecords('tours', [{ photoUrl: 'https://drive.google.com/thumbnail?id=photo' }]);
+    assert.equal(storage.size, 1);
+});
+
+test('failed record deletion keeps the visible record and re-enables its button', async () => {
+    const { app, context } = setup();
+    context.confirm = () => true;
+    context.alert = () => {};
+    app.data = [{ id: 'keep', destination: 'Keep' }];
+    app.backendVersion = 2;
+    app.sendPayload = async () => { throw new Error('Drive unavailable'); };
+    const button = { disabled: false };
+    await app.deleteItem(0, button);
+    assert.equal(app.data[0].id, 'keep');
+    assert.equal(button.disabled, false);
+    assert.equal(app.mutationInProgress, false);
+});
